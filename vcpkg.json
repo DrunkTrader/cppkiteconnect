@@ -1,0 +1,75 @@
+{
+  "name": "cppkiteconnect",
+  "version": "2.0.0",
+  "description": "Modern C++ SDK for Zerodha Kite Connect API",
+  "homepage": "https://github.com/zerodha/cppkiteconnect",
+  "license": "GPL-3.0-only",
+  "supports": "(linux & x64) | (osx & x64) | (windows & x64)",
+  "dependencies": [
+    {
+      "name": "boost-asio",
+      "version>=": "1.83.0"
+    },
+    {
+      "name": "boost-beast",
+      "version>=": "1.83.0"
+    },
+    {
+      "name": "boost-url",
+      "version>=": "1.83.0"
+    },
+    "nlohmann-json",
+    "fmt",
+    "openssl",
+    "zlib",
+    "gtest",
+    {
+      "name": "benchmark",
+      "default-features": false
+    }
+  ],
+  "overrides": [
+    {
+      "name": "openssl",
+      "version": "3.1.4"
+    },
+    {
+      "name": "zlib",
+      "version": "1.3.1"
+    },
+    {
+      "name": "gtest",
+      "version": "1.14.0"
+    },
+    {
+      "name": "fmt",
+      "version": "10.2.1"
+    },
+    {
+      "name": "nlohmann-json",
+      "version": "3.11.3"
+    }
+  ],
+  "features": {
+    "examples": {
+      "description": "Build example programs",
+      "dependencies": []
+    },
+    "tests": {
+      "description": "Build unit tests",
+      "dependencies": [
+        "gtest"
+      ]
+    },
+    "benchmarks": {
+      "description": "Build benchmarks",
+      "dependencies": [
+        "benchmark"
+      ]
+    },
+    "docs": {
+      "description": "Generate documentation",
+      "dependencies": []
+    }
+  }
+}

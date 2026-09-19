@@ -1,0 +1,155 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, v2]
+  pull_request:
+    branches: [main, v2]
+  release:
+    types: [published]
+
+env:
+  VCPKG_VERSION: "2024.02.14"
+
+jobs:
+  # Build and test on multiple platforms
+  build-test:
+    name: ${{ matrix.os }}-${{ matrix.build-type }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        build-type: [Debug, Release]
+        include:
+          - os: ubuntu-latest
+            triplet: x64-linux
+          - os: macos-latest
+            triplet: x64-osx
+          - os: windows-latest
+            triplet: x64-windows
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false  # No longer using submodules
+
+      - name: Cache vcpkg downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/vcpkg/downloads
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-
+
+      - name: Setup vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
+          cd ~/vcpkg
+          git checkout ${{ env.VCPKG_VERSION }}
+          ./bootstrap-vcpkg.sh
+        if: runner.os != 'Windows'
+
+      - name: Setup vcpkg (Windows)
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+          cd C:\vcpkg
+          git checkout ${{ env.VCPKG_VERSION }}
+          .\bootstrap-vcpkg.bat
+        if: runner.os == 'Windows'
+
+      - name: Configure CMake
+        run: cmake --preset=${{ matrix.build-type == 'Debug' && 'debug' || 'release' }}
+        env:
+          VCPKG_ROOT: ${{ runner.os == 'Windows' && 'C:/vcpkg' || '~/vcpkg' }}
+          VCPKG_DEFAULT_TRIPLET: ${{ matrix.triplet }}
+
+      - name: Build
+        run: cmake --build --preset=${{ matrix.build-type == 'Debug' && 'debug' || 'release' }}
+
+      - name: Run tests
+        run: ctest --preset=${{ matrix.build-type == 'Debug' && 'debug' || 'release' }} --output-on-failure
+        if: matrix.build-type == 'Debug'
+
+  # Sanitizer builds (Linux only)
+  sanitizers:
+    name: ${{ matrix.sanitizer }}-sanitizer
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address, undefined, thread]
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Cache vcpkg downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/vcpkg/downloads
+          key: ${{ runner.os }}-vcpkg-sanitizer-${{ hashFiles('vcpkg.json') }}
+
+      - name: Setup vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
+          cd ~/vcpkg
+          git checkout ${{ env.VCPKG_VERSION }}
+          ./bootstrap-vcpkg.sh
+
+      - name: Configure CMake (${{ matrix.sanitizer }})
+        run: cmake --preset=${{ matrix.sanitizer == 'address' && 'asan' || (matrix.sanitizer == 'undefined' && 'ubsan' || 'tsan') }}
+        env:
+          VCPKG_ROOT: ~/vcpkg
+          VCPKG_DEFAULT_TRIPLET: x64-linux
+
+      - name: Build
+        run: cmake --build --preset=${{ matrix.sanitizer == 'address' && 'asan' || (matrix.sanitizer == 'undefined' && 'ubsan' || 'tsan') }}
+
+      - name: Run tests with sanitizer
+        run: ctest --preset=${{ matrix.sanitizer == 'address' && 'asan' || (matrix.sanitizer == 'undefined' && 'ubsan' || 'tsan') }} --output-on-failure
+
+  # Code formatting check
+  format-check:
+    name: Format Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format-17
+
+      - name: Check formatting
+        run: |
+          find include src examples tests -name "*.hpp" -o -name "*.cpp" | xargs clang-format-17 --style=file --dry-run --Werror
+        if: always()
+
+  # Documentation build
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Doxygen
+        run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
+
+      - name: Configure CMake
+        run: cmake -S . -B build -DCPPKITECONNECT_BUILD_DOCS=ON
+
+      - name: Build documentation
+        run: cmake --build build --target docs
+
+      - name: Upload documentation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation
+          path: build/docs/html/
+          retention-days: 30

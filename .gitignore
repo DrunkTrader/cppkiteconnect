@@ -1,19 +1,51 @@
-#build files
+```
+# Build artifacts
 build/
+dist/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
 
-#VS Code auto generated files
-.cache/
-.clangd/
-.vscode/
+# Dependencies
+vcpkg_installed/
+.vcpkg-root
+vendor/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+Makefile
+*.cmake
 compile_commands.json
 
-#generated docs
-!docs/config.doxygen
-!docs/mainpage.dox
-!docs/CMakeLists.txt
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
-#downloaded dependancies
-deps/**
-!deps/CMakeLists.txt
+# Logs
+*.log
 
+# Environment
+.env
+.env.local
+*.env.*
 
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.backup
+```
