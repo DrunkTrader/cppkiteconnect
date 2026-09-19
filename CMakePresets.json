@@ -1,0 +1,182 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    },
+    {
+      "name": "base-novcpkg",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "description": "Debug build with vcpkg",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CPPKITECONNECT_BUILD_EXAMPLES": "ON",
+        "CPPKITECONNECT_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "debug-novcpkg",
+      "displayName": "Debug (no vcpkg)",
+      "description": "Debug build using system packages",
+      "inherits": "base-novcpkg",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CPPKITECONNECT_BUILD_EXAMPLES": "ON",
+        "CPPKITECONNECT_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "description": "Release build with vcpkg",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CPPKITECONNECT_BUILD_EXAMPLES": "ON",
+        "CPPKITECONNECT_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "relwithdebinfo",
+      "displayName": "RelWithDebInfo",
+      "description": "Release with debug info",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CPPKITECONNECT_BUILD_EXAMPLES": "ON",
+        "CPPKITECONNECT_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "asan",
+      "displayName": "Address Sanitizer",
+      "description": "Debug build with AddressSanitizer",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CPPKITECONNECT_BUILD_EXAMPLES": "ON",
+        "CPPKITECONNECT_BUILD_TESTS": "ON",
+        "CPPKITECONNECT_ENABLE_SANITIZERS": "ON",
+        "CPPKITECONNECT_SANITIZER_TYPE": "address"
+      }
+    },
+    {
+      "name": "ubsan",
+      "displayName": "Undefined Behavior Sanitizer",
+      "description": "Debug build with UndefinedBehaviorSanitizer",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CPPKITECONNECT_BUILD_EXAMPLES": "ON",
+        "CPPKITECONNECT_BUILD_TESTS": "ON",
+        "CPPKITECONNECT_ENABLE_SANITIZERS": "ON",
+        "CPPKITECONNECT_SANITIZER_TYPE": "undefined"
+      }
+    },
+    {
+      "name": "tsan",
+      "displayName": "Thread Sanitizer",
+      "description": "Debug build with ThreadSanitizer",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CPPKITECONNECT_BUILD_EXAMPLES": "ON",
+        "CPPKITECONNECT_BUILD_TESTS": "ON",
+        "CPPKITECONNECT_ENABLE_SANITIZERS": "ON",
+        "CPPKITECONNECT_SANITIZER_TYPE": "thread"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "debug-novcpkg",
+      "configurePreset": "debug-novcpkg"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "relwithdebinfo",
+      "configurePreset": "relwithdebinfo"
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan"
+    },
+    {
+      "name": "ubsan",
+      "configurePreset": "ubsan"
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "debug-novcpkg",
+      "configurePreset": "debug-novcpkg",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ubsan",
+      "configurePreset": "ubsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
