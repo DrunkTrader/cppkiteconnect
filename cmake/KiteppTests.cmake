@@ -7,9 +7,13 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(KITE_TEST_CERT_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-certificates")
 execute_process(COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_test_certificates.py" "${KITE_TEST_CERT_DIR}"
-    RESULT_VARIABLE cert_result)
+    RESULT_VARIABLE cert_result
+    OUTPUT_VARIABLE cert_output
+    ERROR_VARIABLE cert_error)
 if(NOT cert_result EQUAL 0)
-    message(FATAL_ERROR "Unable to generate local TLS test certificates (openssl CLI required)")
+    message(FATAL_ERROR
+        "Unable to generate local TLS test certificates (openssl CLI required).\n"
+        "Generator output:\n${cert_output}\n${cert_error}")
 endif()
 file(GLOB test_files CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/kite/*.cpp")
 add_executable(kiteTest ${test_files})

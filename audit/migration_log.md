@@ -1360,3 +1360,64 @@ None; all migration and release-documentation changes remain uncommitted.
 ## Notes
 This is the completed local Phase 7 checkpoint, not a release upload or final
 migration summary while the declared platform gate remains open.
+
+# Follow-up — Portable Expired TLS Fixture Generation
+
+## Status
+COMPLETED
+
+## Objective
+Fix macOS `macos-latest` CMake configuration failure when current OpenSSL rejects
+the intentionally expired certificate's old non-positive `x509 -req -days` form.
+Preserve all certificate filenames, CA relationships, SAN/hostname behavior and
+the expired-certificate lifecycle test.
+
+## Root Cause
+`tests/make_test_certificates.py` passed `-days -1` to `openssl x509 -req` for
+`expired.pem`. Current OpenSSL rejects non-positive validity durations, causing
+the Python generator to exit before CMake could configure the test targets. The
+workflow's Homebrew OpenSSL installation was present; the incompatibility was the
+command form, not a missing dependency.
+
+## Changes Made
+- Kept CA generation, trusted certificate generation, wrong-host generation,
+  filenames, keys, CSRs and extension semantics unchanged.
+- Replaced only the expired certificate signing branch with a temporary OpenSSL CA
+  database/configuration using the existing `ca.pem`/`ca.key` and CSR.
+- Passed explicit historical `-startdate` (30 days ago) and `-enddate` (yesterday)
+  to `openssl ca -batch`, retaining `localhost` SAN and CA issuer.
+- Added captured stdout/stderr and command text to Python OpenSSL failures.
+- Captured certificate-generator output in `cmake/KiteppTests.cmake` and include it
+  in the fatal CMake diagnostic.
+
+## Files Changed
+`tests/make_test_certificates.py`, `cmake/KiteppTests.cmake`, and this journal.
+No workflow or unrelated SDK source was changed.
+
+## Tests / Verification
+- Direct generator with Ubuntu OpenSSL 3.0.13:
+  `python3 tests/make_test_certificates.py /tmp/omnirush/cppkiteconnect-cert-fix`
+  PASS.
+- `expired.pem` inspection shows `notBefore` 30 days ago, `notAfter` yesterday,
+  issuer `cppkiteconnect test CA`, subject `CN=localhost`, SAN `DNS:localhost`.
+- `openssl verify` trusts `trusted.pem` and rejects `expired.pem` specifically with
+  `certificate has expired`.
+- CMake 4.4.4 configure/build and full CTest: PASS 9/9 in
+  `/tmp/omnirush/cppkiteconnect-certfix-build`.
+- CMake 3.18.4 configure/build of `tickerLifecycleTest` and corrected old-CTest
+  invocation: PASS 1/1 in `/tmp/omnirush/cppkiteconnect-certfix-cmake318`.
+- Existing Linux lifecycle, TLS and expired-certificate semantics remain intact.
+- `git diff --check`: PASS.
+
+## CI Result
+Hosted macOS rerun was not available from this environment (`gh` has no
+authenticated session). The fix specifically removes the OpenSSL command form
+known to fail on current macOS OpenSSL; the existing workflow installation was
+left unchanged. The next macOS workflow run is required for hosted confirmation.
+
+## Header-Only Verification
+No SDK implementation, public API or runtime source changed. This is test fixture
+generation and CMake diagnostic infrastructure only.
+
+## Git Commit
+Follow-up uncommitted; the prior migration commit is `1d0d848`.
