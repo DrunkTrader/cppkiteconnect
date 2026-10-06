@@ -173,8 +173,8 @@ struct ticker::Session : std::enable_shared_from_this<ticker::Session> {
         finished = true;
         Error ignored;
         resolver.cancel();
-        deadline.cancel(ignored);
-        writeDeadline.cancel(ignored);
+        deadline.cancel();
+        writeDeadline.cancel();
         // Cancelling TCP alone leaves Beast's handshake/idle timer alive.
         // Explicitly disarm it so run() drains immediately in every state.
         try {

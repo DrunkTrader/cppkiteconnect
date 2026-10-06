@@ -1420,4 +1420,67 @@ No SDK implementation, public API or runtime source changed. This is test fixtur
 generation and CMake diagnostic infrastructure only.
 
 ## Git Commit
-Follow-up uncommitted; the prior migration commit is `1d0d848`.
+Follow-up committed separately as `5091a22` (`fixed CA certificates for mac`).
+
+# Follow-up — Boost.Asio Timer Cancellation Portability
+
+## Status
+COMPLETED
+
+## Objective
+Restore the macOS ticker build while preserving timer cancellation behavior on
+the qualified Linux Boost provider.
+
+## Root Cause
+The ticker passed `boost::system::error_code` objects to the timer
+`cancel(error_code&)` overload. The hosted macOS environment uses Homebrew Boost
+1.92, whose `basic_waitable_timer` exposes the zero-argument `cancel()` form in
+the selected API surface. Linux qualification used Boost 1.83, where both forms
+were available. The macOS compile therefore failed with "too many arguments to
+function call, expected 0, have 1" in the timer cancellation paths.
+
+## Changes Made
+
+- Changed the deadline and write-deadline cancellation calls in `session.hpp` to
+  the portable zero-argument `cancel()` overload.
+- Changed retry-timer cancellation in `internal.hpp` to the same overload.
+- Removed the error-code variable that was only used by the retry-timer call.
+- Retained the error-code variable used by the TCP socket cancellation and close
+  calls.
+
+## Files Changed
+
+`include/kitepp/ticker/session.hpp`, `include/kitepp/ticker/internal.hpp`, and
+this journal.
+
+## API Changes
+
+No public API, callback, lifecycle contract, or transport behavior changed.
+The timer calls now use an overload available on both the qualified Linux and
+macOS Boost providers.
+
+## Tests / Verification
+
+- CMake 4.4.4 build of `/tmp/omnirush/cppkiteconnect-certfix-build`: PASS.
+- CMake 4.4.4 CTest: PASS 9/9, including ticker lifecycle and all consumer
+  checks.
+- CMake 3.18.4 build of `/tmp/omnirush/cppkiteconnect-certfix-cmake318`: PASS.
+- CMake 3.18.4 `tickerLifecycleTest`: PASS 19/19. That older validation tree
+  does not register CTest entries, so the executable was run directly.
+- `git diff --check`: PASS.
+
+## CI Result
+
+The hosted macOS log identified this issue after the certificate-generation fix
+allowed CMake configuration to complete. A new hosted macOS run is still
+required to confirm compilation with AppleClang and Homebrew Boost 1.92.
+
+## Header-Only Verification
+
+No SDK implementation source, compiled SDK library, public header entry point or
+runtime dependency changed beyond the existing header-only ticker code.
+
+## Git Commit
+
+Follow-up uncommitted; the current tree contains only the timer portability fix
+and this audit entry.

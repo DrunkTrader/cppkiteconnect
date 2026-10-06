@@ -84,8 +84,7 @@ inline ticker::ticker(string Key, tickerOptions Options,
 inline ticker::~ticker() noexcept {
     // The caller must join run() before destruction and must not delete from a callback.
     stopRequested = true;
-    boost::system::error_code ignored;
-    retryTimer.cancel(ignored);
+    retryTimer.cancel();
     if (session) { session->abort(); }
     loop.restart();
     while (loop.poll()) {}
