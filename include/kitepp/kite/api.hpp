@@ -24,25 +24,31 @@
  */
 
 #pragma once
-#pragma clang diagnostic ignored "-Wundefined-inline"
 
 #include "PicoSHA2/picosha2.h"
 
 #include "../kite.hpp"
+#include "internal.hpp"
 #include "../utils.hpp"
 
 namespace kiteconnect {
 
 inline kite::kite(string apikey): key(std::move(apikey)), client(root.c_str()) {
+    utils::http::configureClient(client);
     client.set_default_headers({ { "X-Kite-Version", version } });
 };
 
-inline void kite::setApiKey(const string& arg) { key = arg; };
+inline void kite::setApiKey(const string& arg) {
+    key = arg;
+    if (!authorization.empty()) {
+        authorization = FMT("token {0}:{1}", key, token);
+    }
+};
 
 inline string kite::getApiKey() const { return key; };
 
 inline string kite::loginURL() const {
-    return FMT(loginUrlFmt, "api_key"_a = key);
+    return FMT(fmt::runtime(loginUrlFmt), "api_key"_a = key);
 };
 
 inline void kite::setAccessToken(const string& arg) {

@@ -67,9 +67,9 @@ struct placeMfSipParams {
         placeMfSipParams, const string&, frequency, Frequency);
     GENERATE_FLUENT_METHOD(placeMfSipParams, const string&, tag, Tag);
 
-    int installments;
+    int installments = 0;
     std::optional<int> installmentDay;
-    double amount;
+    double amount = 0;
     std::optional<double> initialAmount;
     string symbol;
     string frequency;
@@ -237,17 +237,22 @@ struct mfInstrument {
     explicit mfInstrument(const std::vector<string>& row) { parse(row); };
 
     void parse(const std::vector<string>& tokens) {
+        if (tokens.size() < 16) { throw libException("short MF instrument CSV row"); }
         static const auto toDouble = [](const string& str) -> double {
-            return (str.empty()) ? 0.0 : std::stod(str);
+            return utils::csvNumber<double>(str);
         };
+
+        const auto purchase = utils::csvNumber<int>(tokens[PURCHASE_ALLOWED_IDX]);
+        const auto redemption = utils::csvNumber<int>(tokens[REDEMPTION_ALLOWED_IDX]);
+        if ((purchase != 0 && purchase != 1) || (redemption != 0 && redemption != 1)) {
+            throw libException("invalid CSV boolean");
+        }
 
         tradingsymbol = tokens[TRADINGSYMBOL_IDX];
         amc = tokens[AMC_IDX];
         name = tokens[NAME_IDX];
-        purchaseAllowed =
-            static_cast<bool>(std::stoi(tokens[PURCHASE_ALLOWED_IDX]));
-        redemptionAllowed =
-            static_cast<bool>(std::stoi(tokens[REDEMPTION_ALLOWED_IDX]));
+        purchaseAllowed = purchase != 0;
+        redemptionAllowed = redemption != 0;
         minimumPurchaseAmount = toDouble(tokens[MIN_PURCHASE_AMOUNT_IDX]);
         purchaseAmountMultiplier = toDouble(tokens[PURCHASE_AMOUNT_MUL_IDX]);
         minimumAdditionalPurchaseAmount =

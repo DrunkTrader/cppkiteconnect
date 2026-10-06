@@ -1,205 +1,216 @@
 # Kite Connect API C++ client
 
-- [Overview](https://github.com/zerodha/cppkiteconnect#overview)
-- [Dependencies](https://github.com/zerodha/cppkiteconnect#dependencies)
-- [Getting dependencies](https://github.com/zerodha/cppkiteconnect#getting-dependencies)
-  - [Linux](https://github.com/zerodha/cppkiteconnect#linux)
-  - [Others & uWS v0.14](https://github.com/zerodha/cppkiteconnect#others--uws-v014)
-- [Building & installation](https://github.com/zerodha/cppkiteconnect#building--installation)
-- [Examples](https://github.com/zerodha/cppkiteconnect#examples)
-  - [REST API](https://github.com/zerodha/cppkiteconnect#rest-api)
-  - [Ticker](https://github.com/zerodha/cppkiteconnect#ticker)
-- [Documentation](https://github.com/zerodha/cppkiteconnect#documentation)
-- [License](https://github.com/zerodha/cppkiteconnect#license)
+CPPKiteConnect is a header-only C++ SDK for the Kite Connect REST and streaming
+APIs. The current migration branch defaults to **C++20** and uses Boost.Beast and
+Boost.Asio for the ticker. REST remains synchronous and uses cpp-httplib.
 
-## Overview
+The SDK is qualified on Linux/AArch64 with GCC 13/14 and Clang 18/20, including
+libstdc++, libc++, ASan and UBSan checkpoints. macOS, Windows and other platforms
+remain separate qualification targets. The package version remains `2.2.0` while
+the migration is being qualified; this repository state is not a release artifact.
 
-The official C++ client for communicating with [Kite Connect API](https://kite.trade/).
+## What is included
 
-CPPKiteConnect is a header-only library that wraps around Zerodha's KiteConnect REST API and WebSockets API. It saves you the hassle of directly communicating with the APIs and provides an easy to use, native and modern C++ interface.
+- Header-only CMake targets: `kitepp::models`, `kitepp::rest`,
+  `kitepp::ticker` and `kitepp::kitepp`.
+- Blocking synchronous REST requests with validated JSON/CSV boundaries.
+- TLS-verified WebSocket ticker with SNI, hostname verification and configurable
+  trust roots.
+- Owner-thread callbacks, bounded inbound/outbound queues, cancellable retries
+  and terminal `stop()`.
+- Explicit subscribe-before-mode replay after reconnect.
+- Relocatable CMake package exports and single-/multi-translation-unit consumer
+  checks.
 
-## Dependencies
+The legacy uWebSockets/libuv setup is no longer part of the active SDK. The ticker
+uses Boost.Asio/Beast; uWS, libuv and zlib are not SDK requirements.
 
-CPPKiteConnect requires C++17 and following dependancies:
+## Requirements
 
-- [OpenSSL (devel)](https://github.com/openssl/openssl "OpenSSL")
-- [uWebSockets v0.14 (devel)](https://github.com/uNetworking/uWebSockets/tree/v0.14) and [its dependancies](https://github.com/hoytech/uWebSockets/blob/master/docs/Misc.-details.md#dependencies).
-- [googletest](https://github.com/google/googletest) and [googlemock](https://github.com/google/googletest) are required for running tests.
-- Doxygen is required for generating documentation.
+### Runtime and SDK builds
 
-## Getting dependencies
+- 64-bit platform.
+- C++20 and CMake 3.18 or newer.
+- OpenSSL 3.0 or newer from a security-supported provider.
+- Boost 1.83 or newer for `kitepp::ticker` and `kitepp::kitepp`.
+- Threads and the platform's normal socket dependencies.
 
-### Linux
+The SDK bundles the qualified cpp-httplib 0.59.0, fmt 12.2.0, rapidcsv 9.07,
+RapidJSON and PicoSHA2 headers. Configuration verifies pinned representative
+header hashes and does not download or update dependencies.
 
-- On Fedora 32:
-`sudo dnf install openssl-devel zlib-devel` + (uWS v0.14) + (`gtest-devel gmock-devel` for running tests)
-- On Ubuntu:
-`sudo apt install libssl-dev zlib1g-dev` + (uWS v0.14) + (googletest, googlemock for running tests)
+### Tests and documentation
 
-### Others & uWS v0.14
+- GTest/GMock 1.10 or newer through a CMake config package.
+- Python 3 and the OpenSSL command-line tool for local TLS certificates.
+- Doxygen and Graphviz only when `BUILD_DOCS=ON`.
 
-Use package managers provided by your OS. Unless your package manager provides `v0.14` of `uWS`, you'll have to build and install it manually.
-
-You can also download source of the required dependencies by running `cmake .` in `deps` directory. This will place files in the same directory.
-
-## Building & Installation
-
-Clone the repository and fetch the submodules
+## Get the source
 
 ```sh
 git clone https://github.com/zerodha/cppkiteconnect.git
-submodule update --init --recursive
+cd cppkiteconnect
+git submodule update --init --recursive
 ```
 
-CPPKiteConnect is a header-only library. Copy the `include` folder to system or project's include path.
+The recorded submodule revisions are part of the qualification. Do not update
+submodules to upstream HEAD as part of a normal build.
 
-### Build
+## Build and test
 
-```bash
-mkdir build && cd build
-cmake .. -DBUILD_TESTS=On <other-options>
-make
+```sh
+cmake -S . -B build \
+  -DBUILD_TESTS=ON \
+  -DBUILD_EXAMPLES=ON \
+  -DKITEPP_CHECK_HEADERS=ON
+cmake --build build --parallel 2
+cmake -E chdir build ctest --output-on-failure
 ```
 
-If `cmake` cannot find your `uWS` library, try providing it manually to `cmake` like `cmake .. -DUWS_LIB=/path/to/uWS.so`. Note that this will build the library but some tests might not be run.
+The default top-level build compiles `kitepp-smoke`; tests, examples, benchmarks
+and documentation are opt-in. See [docs/building.md](docs/building.md) for
+manual inclusion, package installation, component selection, sanitizer settings
+and the qualified compiler matrix.
 
-#### Build options
+### C++17 rollback
 
-|  Option          | Description    |
-| :--------------  | ----------:    |
-| `BUILD_TESTS`    | Build tests    |
-| `BUILD_EXAMPLES` | Build examples |
-| `BUILD_DOCS`     | Build docs     |
+The protected compatibility configuration remains available while the complete
+platform matrix is being qualified:
 
-### Run examples using Docker
+```sh
+cmake -S . -B build-cxx17 -DKITEPP_CXX_STANDARD=17 -DBUILD_TESTS=ON
+cmake --build build-cxx17
+cmake -E chdir build-cxx17 ctest --output-on-failure
+```
 
-#### Build the image
+Use separate build/install trees for C++17 and C++20. All downstream translation
+units must use the same SDK language and configuration macros.
 
-In project directory,
+## Install and consume with CMake
 
-`docker build -t cppkiteconnect-dev .`
+```sh
+cmake --install build --prefix "$HOME/.local/kitepp"
+```
 
-#### Run the built image
+```cmake
+find_package(kitepp 2.2 CONFIG REQUIRED COMPONENTS rest)
+target_link_libraries(my_app PRIVATE kitepp::rest)
+```
 
-`docker run -it -e EXAMPLE_NUMBER=1 cppkiteconnect-dev`
+Use `COMPONENTS ticker` for streaming or `COMPONENTS kitepp` for the umbrella.
+REST/model discovery does not require Boost. If ticker is optional during package
+discovery, missing Boost leaves core components usable; required ticker components
+still fail with a dependency diagnostic.
 
-##### env variables
+## Minimal REST usage
 
-| Option              | Description                  |
-|:--------------------|-----------------------------:|
-| `EXAMPLE_NUMBER`    | Example to run (e.g., `1`  ) |
-| `KITE_API_KEY`      | Kite API key                 |
-| `KITE_ACCESS_TOKEN` | Kite access token            |
-| `KITE_API_SECRET`   | Kite API secret              |
+The REST API needs credentials obtained through the Kite login flow. This example
+uses an existing access token and deliberately does not print credentials:
 
-### Run tests
-
-`make && make test ARGS='-V'`
-
-### Generate docs
-
-`make docs`
-
-## Examples
-
-### REST API
-
-```c++
+```cpp
 #include <cstdlib>
 #include <iostream>
-#include "kitepp.hpp"
-
-namespace kc = kiteconnect;
+#include <kitepp/rest.hpp>
 
 int main() {
-    try {
-        kc::kite Kite(std::getenv("KITE_API_KEY"));
-        std::string apiSecret = std::getenv("KITE_API_SECRET");
+    const char* key = std::getenv("KITE_API_KEY");
+    const char* token = std::getenv("KITE_ACCESS_TOKEN");
+    if (!key || !token) {
+        std::cerr << "KITE_API_KEY and KITE_ACCESS_TOKEN are required\n";
+        return 2;
+    }
 
-        std::cout << "login URL: " << Kite.loginURL() << '\n';
-        std::cout << "login with this URL and obtain the request token\n";
-
-        std::string reqToken;
-        std::cout << "enter obtained request token: ";
-        std::cin >> reqToken;
-
-        std::string accessToken =
-            Kite.generateSession(reqToken, apiSecret).tokens.accessToken;
-        Kite.setAccessToken(accessToken);
-        std::cout << "access token is " << Kite.getAccessToken() << '\n';
-
-        kc::userProfile profile = Kite.profile();
-        std::cout << "name: " << profile.userName << "\n";
-        std::cout << "email: " << profile.email << "\n";
-
-} catch (kc::kiteppException& e) {
-    std::cerr << e.what() << ", " << e.code() << ", " << e.message() << '\n';
-} catch (kc::libException& e) {
-     std::cerr << e.what() << '\n';
+    kiteconnect::kite client(key);
+    client.setAccessToken(token);
+    const auto profile = client.profile();
+    std::cout << profile.userName << " <" << profile.email << ">\n";
 }
-catch (std::exception& e) {
-    std::cerr << e.what() << std::endl;
-};
-    return 0;
-};
 ```
 
-### Ticker
+For interactive login, call `loginURL()`, obtain the request token externally,
+then pass it to `generateSession()` with the API secret. Store the resulting
+access token using the application's secret-management mechanism.
 
-```c++
+## Minimal ticker usage
+
+`connect()` and `run()` execute on the owner thread. Configure credentials and
+callbacks before entering `run()`; call `stop()` from another thread or a callback
+when the application is finished.
+
+```cpp
+#include <cstdlib>
 #include <iostream>
-#include "kitepp.hpp"
+#include <kitepp/ticker.hpp>
 
-namespace kc = kiteconnect;
+int main() {
+    const char* key = std::getenv("KITE_API_KEY");
+    const char* token = std::getenv("KITE_ACCESS_TOKEN");
+    if (!key || !token) { return 2; }
 
-void onConnect(kc::ticker* ws) {
-    std::cout << "Connected.. Subscribing now..\n";
-    ws->setMode("full", { 408065, 2953217 });
-};
-
-void onTicks(kc::ticker* ws, const std::vector<kc::tick>& ticks) {
-    for (const auto& i : ticks) {
-        std::cout << "instrument token: " << i.instrumentToken
-                  << " last price: " << i.lastPrice << "\n";
+    kiteconnect::ticker client(key);
+    client.setAccessToken(token);
+    client.onConnect = [](kiteconnect::ticker* ticker) {
+        ticker->subscribe({408065});
+        ticker->setMode(kiteconnect::MODE_FULL, {408065});
     };
-};
-
-void onError(kc::ticker* ws, int code, const std::string& message) {
-    std::cout << "Error! Code: " << code << " message: " << message << "\n";
-};
-
-void onConnectError(kc::ticker* ws) { std::cout << "Couldn't connect..\n"; };
-
-void onClose(kc::ticker* ws, int code, const std::string& message) {
-    std::cout << "Closed the connection.. code: " << code
-              << " message: " << message << "\n";
-};
-
-int main(int argc, char const* argv[]) {
-    kc::ticker Ticker(std::getenv("KITE_API_KEY"), 5, true, 5);
-
-    Ticker.setAccessToken(std::getenv("KITE_ACCESS_TOKEN"));
-    Ticker.onConnect = onConnect;
-    Ticker.onTicks = onTicks;
-    Ticker.onError = onError;
-    Ticker.onConnectError = onConnectError;
-    Ticker.onClose = onClose;
-
-    Ticker.connect();
-    Ticker.run();
-    Ticker.stop();
-
-    return 0;
-};
+    client.onTicks = [](kiteconnect::ticker*,
+        const std::vector<kiteconnect::tick>& ticks) {
+        for (const auto& tick : ticks) {
+            std::cout << tick.instrumentToken << ': '
+                      << tick.lastPrice << '\n';
+        }
+    };
+    client.connect();
+    client.run();
+}
 ```
 
-More examples can be found in the [examples directory](https://github.com/zerodha/cppkiteconnect/tree/main/examples).
+Payload references are borrowed for the callback invocation; copy data that must
+outlive the callback. Destroy a ticker only after `run()` returns and its owning
+thread has joined. See [docs/runtime_contract.md](docs/runtime_contract.md).
 
-## Documentation
+## Examples, benchmarks and documentation
 
-- [KiteConnect API documentation](https://kite.trade/docs/connect/v3/)
-- [CPPKiteConnect reference documentation](https://kite.trade/docs/cppkiteconnect/#documentation)
+Examples 1, 3 and 4 are live API clients; example2 is a compiled Doxygen snippet
+collection. They are compiled by `BUILD_EXAMPLES=ON` and do not run as offline
+tests. They use `KITE_API_KEY`, `KITE_API_SECRET` and/or `KITE_ACCESS_TOKEN` and
+never print access tokens.
+
+Generate API documentation with:
+
+```sh
+cmake -S . -B build-docs -DBUILD_DOCS=ON
+cmake --build build-docs --target docs
+```
+
+Compare the decoder's C++17/C++20 allocation behavior with the opt-in benchmark:
+
+```sh
+cmake -S . -B build-bench20 -DCMAKE_BUILD_TYPE=Release \
+  -DKITEPP_BUILD_BENCHMARKS=ON
+cmake --build build-bench20 --target kitepp-decoder-benchmark
+./build-bench20/kitepp-decoder-benchmark
+```
+
+The benchmark uses synthetic frames and is not production latency evidence.
+
+## Known scope and compatibility
+
+The current public REST/DTO/exception surfaces remain compatibility-oriented.
+Major API changes such as strong identifiers, result-returning interfaces,
+explicit optional states and removal of public RapidJSON coupling are deferred to
+a future major-version review. The REST root and broader network policy are still
+fixed by the existing facade. Live-service behavior and complete macOS/Windows
+release acceptance are not claimed by the offline qualification suite.
+
+See:
+
+- [Build and package guide](docs/building.md)
+- [Runtime contract](docs/runtime_contract.md)
+- [Dependency policy](docs/dependencies.md)
+- [Migration release notes](docs/release-notes.md)
+- [Migration audit and qualification journal](audit/migration_log.md)
 
 ## License
 
-[MIT](https://opensource.org/licenses/MIT)
+[MIT](LICENSE)

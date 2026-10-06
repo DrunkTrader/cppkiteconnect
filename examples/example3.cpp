@@ -24,6 +24,7 @@
  */
 
 #include <iostream>
+#include <cstdlib>
 
 #include "kitepp.hpp"
 
@@ -31,6 +32,7 @@ namespace kc = kiteconnect;
 
 void onConnect(kc::ticker* ws) {
     std::cout << "connected.. Subscribing now..\n";
+    ws->subscribe({ 408065, 2953217 });
     ws->setMode("full", { 408065, 2953217 });
 };
 
@@ -53,9 +55,15 @@ void onClose(kc::ticker* ws, int code, const std::string& message) {
 };
 
 int main(int argc, char const* argv[]) {
-    kc::ticker Ticker(std::getenv("KITE_API_KEY"), 5, true, 5);
+    const char* apiKey = std::getenv("KITE_API_KEY");
+    const char* accessToken = std::getenv("KITE_ACCESS_TOKEN");
+    if (!apiKey || !accessToken) {
+        std::cerr << "KITE_API_KEY and KITE_ACCESS_TOKEN are required\n";
+        return 2;
+    }
+    kc::ticker Ticker(apiKey, 5, true, 5);
 
-    Ticker.setAccessToken(std::getenv("KITE_ACCESS_TOKEN"));
+    Ticker.setAccessToken(accessToken);
     Ticker.onConnect = onConnect;
     Ticker.onTicks = onTicks;
     Ticker.onError = onError;

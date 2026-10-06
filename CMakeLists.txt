@@ -1,118 +1,77 @@
-cmake_minimum_required(VERSION 3.10)
-project(CppKiteConnect)
+cmake_minimum_required(VERSION 3.18)
+project(CppKiteConnect VERSION 2.2.0 LANGUAGES CXX)
 
-# set variables
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/modules/")
-
-# detect Linux (for optional linking of libuv)
-if(UNIX AND NOT APPLE)
-        message(STATUS "environment set to linux")
-        set(LINUX TRUE)
+if(POLICY CMP0144)
+    cmake_policy(SET CMP0144 NEW)
+endif()
+set(kitepp_top_level OFF)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(kitepp_top_level ON)
+endif()
+option(BUILD_EXAMPLES "Build runnable SDK examples" OFF)
+option(BUILD_TESTS "Build offline unit/integration tests" OFF)
+option(BUILD_DOCS "Generate Doxygen documentation" OFF)
+option(KITEPP_ENABLE_TICKER "Provide ticker and umbrella targets" ON)
+option(KITEPP_BUILD_SMOKE "Compile an SDK consumer in the default build" ${kitepp_top_level})
+option(KITEPP_CHECK_HEADERS "Compile each first-party header independently" OFF)
+option(KITEPP_BUILD_BENCHMARKS "Build offline decoder allocation/latency probe" OFF)
+set(KITEPP_CXX_STANDARD 20 CACHE STRING "SDK standard: 20, or 17 for the protected rollback configuration")
+set_property(CACHE KITEPP_CXX_STANDARD PROPERTY STRINGS 20 17)
+if(NOT KITEPP_CXX_STANDARD MATCHES "^(17|20)$")
+    message(FATAL_ERROR "KITEPP_CXX_STANDARD must be 20 or the explicit 17 compatibility checkpoint")
 endif()
 
-# set project include directory
-include_directories("${CMAKE_SOURCE_DIR}/include")
+include(GNUInstallDirs)
+include(cmake/KiteppDependencies.cmake)
+include(cmake/KiteppTargets.cmake)
+include(cmake/KiteppInstall.cmake)
 
-# find deps
-set(LINUX_AND_UV_NOT_FOUND false)
-
-if(BUILD_EXAMPLES OR BUILD_TESTS)
-        find_package(Threads REQUIRED)
-        find_package(OpenSSL REQUIRED)
-        find_package(ZLIB REQUIRED)
-        find_library(UWS_LIB uWS REQUIRED)
-        find_path(UWS_INCLUDE uWS REQUIRED)
-
-        if(DEFINED LINUX)
-                find_library(UV_LIB uv)
-                find_path(UV_INCLUDE "uv.h")
-        else()
-                find_library(UV_LIB uv REQUIRED)
-                find_path(UV_INCLUDE "uv.h" REQUIRED)
-        endif()
-
-        if(BUILD_TESTS)
-                find_package(GTest REQUIRED)
-                find_package(GMock REQUIRED)
-        endif()
-
-        if((NOT UV_LIB OR NOT UV_INCLUDE) AND DEFINED LINUX)
-                set(LINUX_AND_UV_NOT_FOUND true)
-                message(STATUS "couldn't find libuv")
-        endif()
+if(KITEPP_BUILD_SMOKE)
+    if(KITEPP_ENABLE_TICKER)
+        add_executable(kitepp-smoke tests/compile/umbrella.cpp)
+        target_link_libraries(kitepp-smoke PRIVATE kitepp::kitepp)
+    else()
+        add_executable(kitepp-smoke tests/compile/rest.cpp)
+        target_link_libraries(kitepp-smoke PRIVATE kitepp::rest)
+    endif()
+    kitepp_strict_standard(kitepp-smoke)
 endif()
 
-# build examples
 if(BUILD_EXAMPLES)
-        function(build_exmaple example_name)
-                add_executable(${example_name} "${CMAKE_SOURCE_DIR}/examples/${example_name}.cpp")
-
-                if(LINUX_AND_UV_NOT_FOUND)
-                        target_include_directories(${example_name} PUBLIC ${UWS_INCLUDE})
-                        target_link_libraries(${example_name} PUBLIC Threads::Threads OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB ${UWS_LIB})
-                else()
-                        target_include_directories(${example_name} PUBLIC ${UWS_INCLUDE} ${UV_INCLUDE})
-                        target_link_libraries(${example_name} PUBLIC Threads::Threads OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB ${UWS_LIB} ${UV_LIB})
-                endif()
-        endfunction(build_exmaple)
-
-        build_exmaple(example1)
-        build_exmaple(example2)
-        build_exmaple(example3)
-        build_exmaple(example4)
+    if(NOT KITEPP_ENABLE_TICKER)
+        message(FATAL_ERROR "The existing examples include the umbrella; enable KITEPP_ENABLE_TICKER")
+    endif()
+    foreach(number RANGE 1 4)
+        add_executable(example${number} examples/example${number}.cpp)
+        target_link_libraries(example${number} PRIVATE kitepp::kitepp)
+        kitepp_strict_standard(example${number})
+    endforeach()
+    add_executable(kitepp-documented-examples tests/compile/documented_examples.cpp)
+    target_link_libraries(kitepp-documented-examples PRIVATE kitepp::kitepp)
+    kitepp_strict_standard(kitepp-documented-examples)
 endif()
 
-# build tests
 if(BUILD_TESTS)
-        include(CTest)
-        option(CMAKE_USE_WIN32_THREADS_INIT "using WIN32 threads" ON)
-        option(gtest_disable_pthreads "disabling pthreads in gtest" ON)
-
-        # kite-test
-        set(KITE_TEST_BINARY_NAME kiteTest)
-        file(GLOB test_files
-                "${CMAKE_SOURCE_DIR}/tests/unit/kite/*.cpp"
-        )
-        add_executable(${KITE_TEST_BINARY_NAME} ${test_files})
-        target_include_directories(${KITE_TEST_BINARY_NAME} PUBLIC ${GTEST_INCLUDE_DIRS} ${GMOCK_INCLUDE_DIRS})
-        target_link_libraries(${KITE_TEST_BINARY_NAME} PUBLIC OpenSSL::SSL OpenSSL::Crypto ${GTEST_BOTH_LIBRARIES} ${GMOCK_BOTH_LIBRARIES} Threads::Threads)
-        add_test(NAME kite-test COMMAND ${KITE_TEST_BINARY_NAME})
-
-        # ticker-test
-        set(TICKER_TEST_BINARY_NAME tickerTest)
-        add_executable(${TICKER_TEST_BINARY_NAME} "${CMAKE_SOURCE_DIR}/tests/unit/tickertest.cpp")
-
-        if(LINUX_AND_UV_NOT_FOUND)
-                target_include_directories(${TICKER_TEST_BINARY_NAME} PUBLIC ${UWS_INCLUDE} ${GTEST_INCLUDE_DIRS})
-                target_link_libraries(${TICKER_TEST_BINARY_NAME} PUBLIC OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB ${UWS_LIB} ${GTEST_LIBRARIES} ${GTEST_MAIN_LIBRARIES} Threads::Threads)
-        else()
-                target_include_directories(${TICKER_TEST_BINARY_NAME} PUBLIC ${UV_INCLUDE} ${UWS_INCLUDE} ${GTEST_INCLUDE_DIRS})
-                target_link_libraries(${TICKER_TEST_BINARY_NAME} PUBLIC OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB ${UV_LIB} ${UWS_LIB} ${GTEST_LIBRARIES} ${GTEST_MAIN_LIBRARIES} Threads::Threads)
-        endif()
-
-        add_test(NAME ticker-test COMMAND ${TICKER_TEST_BINARY_NAME})
+    include(cmake/KiteppTests.cmake)
 endif()
 
-# generate docs
+if(KITEPP_CHECK_HEADERS)
+    include(cmake/KiteppHeaderChecks.cmake)
+endif()
+
+if(KITEPP_BUILD_BENCHMARKS)
+    if(NOT KITEPP_ENABLE_TICKER)
+        message(FATAL_ERROR "Decoder benchmark requires ticker headers")
+    endif()
+    add_executable(kitepp-decoder-benchmark tests/benchmarks/decoder.cpp)
+    target_link_libraries(kitepp-decoder-benchmark PRIVATE kitepp::ticker)
+    kitepp_strict_standard(kitepp-decoder-benchmark)
+endif()
+
 if(BUILD_DOCS)
-        find_package(Doxygen)
-
-        if(DOXYGEN_FOUND)
-                # set io files and configure doxyfile
-                set(DOXY_FILE Doxyfile.in)
-                set(DOXYGEN_IN ${CMAKE_SOURCE_DIR}/cmake/templates/${DOXY_FILE})
-                set(DOXYGEN_OUT ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile.out)
-                configure_file(${DOXYGEN_IN} ${DOXYGEN_OUT} @ONLY)
-
-                # ! don't add to the `all` target. doing so will build build docs everytime.
-                add_custom_target(docs
-                        COMMAND ${DOXYGEN_EXECUTABLE} ${DOXYGEN_OUT}
-                        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-                        COMMENT "generating documentation with doxygen"
-                        VERBATIM)
-        else(DOXYGEN_FOUND)
-                message(FATAL_ERROR "doxygen is required for generating documentation")
-        endif(DOXYGEN_FOUND)
+    find_package(Doxygen REQUIRED)
+    configure_file(cmake/templates/Doxyfile.in Doxyfile.out @ONLY)
+    add_custom_target(docs COMMAND ${DOXYGEN_EXECUTABLE} Doxyfile.out
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+        COMMENT "Generating SDK documentation" VERBATIM)
 endif()

@@ -29,7 +29,9 @@
 
 #include <gtest/gtest.h>
 
-#include "kitepp.hpp"
+#include <kitepp/ticker.hpp>
+
+#include "test_paths.hpp"
 
 namespace kiteconnect {
 
@@ -37,7 +39,8 @@ namespace kc = kiteconnect;
 
 TEST(tickerTest, binaryParsingTest) {
     kc::ticker Ticker("apikey123");
-    std::ifstream dataFile("../tests/mock_custom/websocket_ticks.bin");
+    std::ifstream dataFile(
+        kc::test::testDataPath("../tests/mock_custom/websocket_ticks.bin"));
     ASSERT_TRUE(dataFile);
     std::vector<char> data(std::istreambuf_iterator<char>(dataFile), {});
 
@@ -169,4 +172,46 @@ TEST(tickerTest, binaryParsingTest) {
     EXPECT_EQ(tick2.marketDepth.sell[4].quantity, 670);
     EXPECT_EQ(tick2.marketDepth.sell[4].orders, 1);
 };
+TEST(tickerTest, malformedBinaryTest) {
+    ticker client("synthetic");
+    std::ifstream file(test::testDataPath("../tests/mock_custom/websocket_ticks.bin"),
+        std::ios::binary);
+    ASSERT_TRUE(file);
+    std::vector<char> valid(std::istreambuf_iterator<char>(file), {});
+    for (size_t length = 0; length < valid.size(); ++length) {
+        EXPECT_THROW(client.parseBinaryMessage(valid.data(), length), libException);
+    }
+    EXPECT_THROW(client.parseBinaryMessage(nullptr, 2), libException);
+    std::vector<char> invalid { 0, 1, 0, 4, 0, 0, 0, 1 };
+    EXPECT_THROW(client.parseBinaryMessage(invalid.data(), invalid.size()), libException);
+    invalid = { 0, 1, static_cast<char>(255), static_cast<char>(255) };
+    EXPECT_THROW(client.parseBinaryMessage(invalid.data(), invalid.size()), libException);
+    valid.push_back(0);
+    EXPECT_THROW(client.parseBinaryMessage(valid.data(), valid.size()), libException);
+}
+
+TEST(tickerTest, packetModesTest) {
+    ticker client("synthetic");
+    for (size_t size : { 8U, 28U, 32U, 44U, 184U }) {
+        std::vector<char> frame(size + 4, 0);
+        frame[1] = 1;
+        frame[3] = static_cast<char>(size);
+        frame[7] = size == 28 || size == 32 ? 9 : 1;
+        auto ticks = client.parseBinaryMessage(frame.data(), frame.size());
+        ASSERT_EQ(ticks.size(), 1U);
+        EXPECT_TRUE(std::isfinite(ticks[0].netChange));
+        EXPECT_EQ(ticks[0].mode, size == 8 ? MODE_LTP :
+            size == 32 || size == 184 ? MODE_FULL : MODE_QUOTE);
+    }
+}
+
+TEST(tickerTest, textParsingTest) {
+    ticker client("synthetic");
+    EXPECT_THROW(client.processTextMessage("[]"), libException);
+    EXPECT_THROW(client.processTextMessage(R"({"type":"order","data":1})"), libException);
+    client.onOrderUpdate = [](ticker*, const postback&) {};
+    EXPECT_THROW(client.processTextMessage(R"({"type":"order","data":1})"), libException);
+    client.onMessage = [](ticker*, const string&) {};
+    EXPECT_THROW(client.processTextMessage(R"({"type":"message","data":{}})"), libException);
+}
 } // namespace kiteconnect

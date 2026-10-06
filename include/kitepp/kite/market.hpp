@@ -29,6 +29,7 @@
 #include <string>
 
 #include "../kite.hpp"
+#include "internal.hpp"
 #include "../utils.hpp"
 
 namespace kiteconnect {
@@ -39,7 +40,7 @@ inline std::unordered_map<string, quote> kite::getQuote(
         [](utils::json::JsonObject& data) {
             std::unordered_map<string, quote> Quotes;
             for (auto& i : data) {
-                Quotes.emplace(i.name.GetString(), i.value.GetObject());
+                Quotes.emplace(i.name.GetString(), utils::json::checkedObject(i.value));
             };
             return Quotes;
         });
@@ -52,7 +53,7 @@ inline std::unordered_map<string, ohlcQuote> kite::getOhlc(
         { encodeSymbolsList(symbols) }, [](utils::json::JsonObject& data) {
             std::unordered_map<string, ohlcQuote> Quotes;
             for (auto& i : data) {
-                Quotes.emplace(i.name.GetString(), i.value.GetObject());
+                Quotes.emplace(i.name.GetString(), utils::json::checkedObject(i.value));
             };
             return Quotes;
         });
@@ -65,7 +66,7 @@ inline std::unordered_map<string, ltpQuote> kite::getLtp(
         { encodeSymbolsList(symbols) }, [](utils::json::JsonObject& data) {
             std::unordered_map<string, ltpQuote> Quotes;
             for (auto& i : data) {
-                Quotes.emplace(i.name.GetString(), i.value.GetObject());
+                Quotes.emplace(i.name.GetString(), utils::json::checkedObject(i.value));
             };
             return Quotes;
         });
@@ -80,8 +81,8 @@ inline std::vector<historicalData> kite::getHistoricalData(
             params.to, toString(params.continuous), toString(params.oi) },
         [](utils::json::JsonObject& data) {
             std::vector<historicalData> candles;
-            for (auto& i : data["candles"].GetArray()) {
-                candles.emplace_back(i.GetArray());
+            for (auto& i : utils::json::memberArray(data, "candles")) {
+                candles.emplace_back(utils::json::checkedArray(i));
             }
             return candles;
         });

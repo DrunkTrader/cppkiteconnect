@@ -62,7 +62,7 @@ struct tick {
     double lastPrice = -1;
     double averageTradePrice = -1;
     double netChange = -1;
-    bool isTradable;
+    bool isTradable = false;
     struct OHLC {
         double open = -1;
         double high = -1;

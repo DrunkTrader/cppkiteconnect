@@ -29,6 +29,7 @@
 #include <string>
 
 #include "../kite.hpp"
+#include "internal.hpp"
 #include "../utils.hpp"
 
 namespace kiteconnect {
@@ -60,7 +61,7 @@ inline std::vector<mfOrder> kite::getMfOrders() {
     return callApi<std::vector<mfOrder>, utils::json::JsonArray, true>(
         "mf.orders", {}, {}, [](utils::json::JsonArray& data) {
             std::vector<mfOrder> Orders;
-            for (auto& i : data) { Orders.emplace_back(i.GetObject()); }
+            for (auto& i : data) { Orders.emplace_back(utils::json::checkedObject(i)); }
             return Orders;
         });
 };
@@ -74,12 +75,17 @@ inline std::vector<mfHolding> kite::getMfHoldings() {
     return callApi<std::vector<mfHolding>, utils::json::JsonArray, true>(
         "mf.holdings", {}, {}, [](utils::json::JsonArray& data) {
             std::vector<mfHolding> holdings;
-            for (auto& i : data) { holdings.emplace_back(i.GetObject()); }
+            for (auto& i : data) { holdings.emplace_back(utils::json::checkedObject(i)); }
             return holdings;
         });
 };
 
 inline placeMfSipResponse kite::placeMfSip(const placeMfSipParams& params) {
+    if (params.installments == 0 || params.installments < -1 ||
+        !std::isfinite(params.amount) ||
+        params.amount <= 0 || params.symbol.empty() || params.frequency.empty()) {
+        throw libException("incomplete SIP parameters");
+    }
     // required parameters
     utils::http::Params bodyParams = {
         { "tradingsymbol", params.symbol },
@@ -107,7 +113,7 @@ inline string kite::modifyMfSip(const modifyMfSipParams& params) {
 
     return callApi<string, utils::json::JsonObject, true>("mf.sip.modify",
         bodyParams, { params.sipId }, [](utils::json::JsonObject& data) {
-            return utils::json::get<string>(data, "order_id");
+            return utils::json::get<string>(data, "sip_id");
         });
 };
 
@@ -122,7 +128,7 @@ inline std::vector<mfSip> kite::getSips() {
     return callApi<std::vector<mfSip>, utils::json::JsonArray, true>(
         "mf.sips", {}, {}, [](utils::json::JsonArray& data) {
             std::vector<mfSip> sips;
-            for (auto& i : data) { sips.emplace_back(i.GetObject()); }
+            for (auto& i : data) { sips.emplace_back(utils::json::checkedObject(i)); }
             return sips;
         });
 };

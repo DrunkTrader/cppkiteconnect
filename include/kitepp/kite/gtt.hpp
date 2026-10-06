@@ -29,6 +29,7 @@
 #include <string>
 
 #include "../kite.hpp"
+#include "internal.hpp"
 #include "../utils.hpp"
 
 namespace kiteconnect {
@@ -37,6 +38,10 @@ using std::string;
 
 template <class T>
 string getConditionJson(const T& params) {
+    if (!std::isfinite(params.lastPrice) || params.lastPrice < 0 ||
+        params.exchange.empty() || params.symbol.empty() || params.triggerValues.empty()) {
+        throw libException("incomplete GTT condition");
+    }
     utils::json::json<utils::json::JsonObject> conditionJson;
     conditionJson.field("exchange", params.exchange);
     conditionJson.field("tradingsymbol", params.symbol);
@@ -80,7 +85,7 @@ inline std::vector<GTT> kite::triggers() {
     return callApi<std::vector<GTT>, utils::json::JsonArray, true>(
         "gtt", {}, {}, [](utils::json::JsonArray& data) {
             std::vector<GTT> Triggers;
-            for (auto& i : data) { Triggers.emplace_back(i.GetObject()); }
+            for (auto& i : data) { Triggers.emplace_back(utils::json::checkedObject(i)); }
             return Triggers;
         });
 };
@@ -91,6 +96,7 @@ inline GTT kite::getGtt(int triggerId) {
 };
 
 inline int kite::modifyGtt(const kc::modifyGttParams& params) {
+    if (params.triggerId <= 0) { throw libException("invalid GTT trigger ID"); }
     utils::http::Params reqParams = {
         { "type", params.triggerType },
         { "condition", internal::getConditionJson(params) },

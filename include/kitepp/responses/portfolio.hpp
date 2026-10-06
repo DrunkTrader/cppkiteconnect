@@ -157,13 +157,10 @@ struct positions {
     explicit positions(const rj::Value::Object& val) { parse(val); };
 
     void parse(const rj::Value::Object& val) {
-        rj::Value netVal(rj::kArrayType);
-        utils::json::get<utils::json::JsonArray>(val, netVal, "net");
-        for (auto& i : netVal.GetArray()) { net.emplace_back(i.GetObject()); };
-
-        rj::Value dayVal(rj::kArrayType);
-        utils::json::get<utils::json::JsonArray>(val, dayVal, "day");
-        for (auto& i : dayVal.GetArray()) { day.emplace_back(i.GetObject()); };
+        auto parsedNet = utils::json::objectArray<position>(val, "net");
+        auto parsedDay = utils::json::objectArray<position>(val, "day");
+        net = std::move(parsedNet);
+        day = std::move(parsedDay);
     };
 
     std::vector<position> net;

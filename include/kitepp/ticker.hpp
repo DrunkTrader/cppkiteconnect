@@ -25,5 +25,7 @@
 
 #pragma once
 
+#include "config.hpp"
+
 #include "ticker/internal.hpp"
 #include "ticker/ws.hpp"

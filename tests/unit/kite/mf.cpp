@@ -272,11 +272,11 @@ TEST(kiteTest, placeMFSIPTest) {
 
 TEST(kiteTest, modifyMFSIPTest) {
     const string JSON =
-        kc::test::readFile("../tests/mock_responses/mf_order_response.json");
+        kc::test::readFile("../tests/mock_responses/mf_sip_modify.json");
     constexpr double AMOUNT = 900;
     const string SIP_ID = "123457";
     const string FREQUENCY = "monthly";
-    const string EXPECTED_SIP_ID = "3bb085d1-5038-450e-a807-6543fef6c9ae";
+    const string EXPECTED_SIP_ID = "986124545877922";
 
     StrictMock<kc::test::mockKite> Kite;
     EXPECT_CALL(Kite, sendReq(utils::http::endpoint { utils::http::METHOD::PUT,

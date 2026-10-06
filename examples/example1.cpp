@@ -31,8 +31,14 @@ namespace kc = kiteconnect;
 
 int main() {
     try {
-        kc::kite Kite(std::getenv("KITE_API_KEY"));
-        std::string apiSecret = std::getenv("KITE_API_SECRET");
+        const char* apiKey = std::getenv("KITE_API_KEY");
+        const char* secret = std::getenv("KITE_API_SECRET");
+        if (!apiKey || !secret) {
+            std::cerr << "KITE_API_KEY and KITE_API_SECRET are required\n";
+            return 2;
+        }
+        kc::kite Kite(apiKey);
+        std::string apiSecret = secret;
 
         std::cout << "login URL: " << Kite.loginURL() << '\n';
         std::cout << "login with this URL and obtain the request token\n";
@@ -44,7 +50,6 @@ int main() {
         std::string accessToken =
             Kite.generateSession(reqToken, apiSecret).tokens.accessToken;
         Kite.setAccessToken(accessToken);
-        std::cout << "access token is " << Kite.getAccessToken() << '\n';
 
         kc::userProfile profile = Kite.profile();
         std::cout << "name: " << profile.userName << "\n";

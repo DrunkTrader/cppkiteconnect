@@ -45,11 +45,11 @@
 #include "../userconstants.hpp" //modes
 #include "../utils.hpp"
 #include "ws.hpp"
+#include "session.hpp"
 
 #include "rapidjson/include/rapidjson/document.h"
 #include "rapidjson/include/rapidjson/rapidjson.h"
 #include "rapidjson/include/rapidjson/writer.h"
-#include <uWS/uWS.h>
 
 namespace kiteconnect {
 // To make sure doubles are parsed correctly
@@ -64,73 +64,156 @@ namespace utils = kc::internal::utils;
 inline ticker::ticker(string Key, unsigned int ConnectTimeout,
     bool EnableReconnect, unsigned int maxreconnectdelay,
     unsigned int MaxReconnectTries)
-    : key(std::move(Key)),
-      connectTimeout(ConnectTimeout * utils::MILLISECONDS_IN_A_SECOND),
-      enableReconnect(EnableReconnect), maxReconnectDelay(maxreconnectdelay),
-      maxReconnectTries(MaxReconnectTries),
-      group(hub.createGroup<uWS::CLIENT>()) {};
+    : ticker(std::move(Key), tickerOptions {}, ConnectTimeout, EnableReconnect,
+          maxreconnectdelay, MaxReconnectTries) {}
 
-inline void ticker::setApiKey(const string& Key) { key = Key; };
+inline ticker::ticker(string Key, tickerOptions Options,
+    unsigned int ConnectTimeout, bool EnableReconnect,
+    unsigned int MaxReconnectDelay, unsigned int MaxReconnectTries)
+    : key(std::move(Key)), options(std::move(Options)),
+      connectTimeout(ConnectTimeout <= std::numeric_limits<int>::max() / 1000 ?
+          ConnectTimeout * 1000 : 0), enableReconnect(EnableReconnect),
+      maxReconnectDelay(MaxReconnectDelay), maxReconnectTries(MaxReconnectTries) {
+    if (!connectTimeout || !maxReconnectDelay || options.host.empty() ||
+        options.port.empty() || options.closeTimeout.count() <= 0 ||
+        !options.maxMessageBytes || !options.maxQueuedBytes) {
+        throw libException("invalid ticker configuration");
+    }
+}
 
-inline string ticker::getApiKey() const { return key; };
+inline ticker::~ticker() noexcept {
+    // The caller must join run() before destruction and must not delete from a callback.
+    stopRequested = true;
+    boost::system::error_code ignored;
+    retryTimer.cancel(ignored);
+    if (session) { session->abort(); }
+    loop.restart();
+    while (loop.poll()) {}
+    session.reset();
+}
 
-inline void ticker::setAccessToken(const string& Token) { token = Token; };
+inline void ticker::requireOwner() const {
+    const std::lock_guard<std::mutex> lock(ownerMutex);
+    if (running && owner != std::this_thread::get_id()) {
+        throw libException("ticker operation requires the run() owner thread");
+    }
+}
 
-inline string ticker::getAccessToken() const { return token; };
+inline void ticker::setApiKey(const string& Key) { requireOwner(); key = Key; };
+
+inline string ticker::getApiKey() const { requireOwner(); return key; };
+
+inline void ticker::setAccessToken(const string& Token) { requireOwner(); token = Token; };
+
+inline string ticker::getAccessToken() const { requireOwner(); return token; };
 
 inline void ticker::connect() {
-    assignCallbacks();
-    connectInternal();
+    requireOwner();
+    if (state != State::Ready || stopRequested) {
+        throw libException("ticker connect already requested or stopped");
+    }
+    state = State::Connecting;
+    boost::asio::post(loop, [this] { if (!stopRequested) { connectInternal(); } });
 };
 
-inline bool ticker::isConnected() const { return ws != nullptr; };
+inline bool ticker::isConnected() const {
+    return !stopRequested.load() && connected.load();
+};
 
 inline std::chrono::time_point<std::chrono::system_clock> ticker::
     getLastBeatTime() const {
-    return lastBeatTime;
+    return std::chrono::system_clock::time_point(
+        std::chrono::system_clock::duration(heartbeatCount.load()));
 };
 
-inline void ticker::run() { hub.run(); };
+inline void ticker::run() {
+    {
+        const std::lock_guard<std::mutex> lock(ownerMutex);
+        if (running.exchange(true)) { throw libException("ticker loop is already running"); }
+        owner = std::this_thread::get_id();
+    }
+    loop.restart();
+    try { loop.run(); }
+    catch (...) { running = false; throw; }
+    connected = false;
+    state = State::Stopped;
+    running = false;
+};
 
 inline void ticker::stop() {
-    if (isConnected()) { ws->close(); };
+    if (stopRequested.exchange(true)) { return; }
+    connected = false;
+    boost::asio::post(loop, [this] { stopInternal(); });
 };
 
+inline void ticker::stopInternal() {
+    state = State::Stopping;
+    connected = false;
+    retryTimer.cancel();
+    if (session) { session->shutdown(); }
+    state = State::Stopped;
+}
+
+inline void ticker::reportError(int code, const string& message) noexcept {
+    try {
+        const auto callback = onError;
+        if (callback) { callback(this, code, message); }
+    } catch (...) { stop(); }
+}
+
+inline void ticker::validateTokens(const std::vector<int>& tokens) const {
+    requireOwner();
+    if (tokens.size() > 3000 || std::any_of(tokens.begin(), tokens.end(),
+            [](int token) { return token <= 0; })) {
+        throw libException("invalid instrument token list");
+    }
+}
+
+inline void ticker::sendText(string message) {
+    requireOwner();
+    if (!isConnected() || !session) { throw libException("not connected to websocket server"); }
+    session->send(std::move(message));
+}
+
 inline void ticker::subscribe(const std::vector<int>& instrumentTokens) {
+    validateTokens(instrumentTokens);
+    auto desired = subbedInstruments;
+    for (int token : instrumentTokens) { desired.emplace(token, DEFAULT_MODE); }
+    if (desired.size() > 3000) { throw libException("subscription limit exceeded"); }
     utils::json::json<utils::json::JsonObject> req;
     req.field("a", "subscribe");
     req.field("v", instrumentTokens);
     string reqStr = req.serialize();
 
-    if (isConnected()) {
-        ws->send(reqStr.data(), reqStr.size(), uWS::OpCode::TEXT);
-        for (const int tok : instrumentTokens) {
-            subbedInstruments[tok] = DEFAULT_MODE;
-        };
-    } else {
-        throw kc::libException("not connected to websocket server");
-    };
+    sendText(std::move(reqStr));
+    subbedInstruments = std::move(desired);
 };
 
 inline void ticker::unsubscribe(const std::vector<int>& instrumentTokens) {
+    validateTokens(instrumentTokens);
     utils::json::json<utils::json::JsonObject> req;
     req.field("a", "unsubscribe");
     req.field("v", instrumentTokens);
     string reqStr = req.serialize();
 
-    if (isConnected()) {
-        ws->send(reqStr.data(), reqStr.size(), uWS::OpCode::TEXT);
+    sendText(std::move(reqStr));
         for (const int tok : instrumentTokens) {
             auto it = subbedInstruments.find(tok);
             if (it != subbedInstruments.end()) { subbedInstruments.erase(it); };
         };
-    } else {
-        throw kc::libException("not connected to websocket server");
-    };
 };
 
 inline void ticker::setMode(
     const string& mode, const std::vector<int>& instrumentTokens) {
+    validateTokens(instrumentTokens);
+    if (mode != MODE_LTP && mode != MODE_QUOTE && mode != MODE_FULL) {
+        throw libException("invalid subscription mode");
+    }
+    for (int token : instrumentTokens) {
+        if (!subbedInstruments.count(token)) {
+            throw libException("setMode requires subscribed instruments");
+        }
+    }
     // create request json
     rj::Document req;
     req.SetObject();
@@ -150,8 +233,7 @@ inline void ticker::setMode(
 
     // send the request
     string reqStr = utils::json::serialize(req);
-    if (isConnected()) {
-        ws->send(reqStr.data(), reqStr.size(), uWS::OpCode::TEXT);
+    sendText(std::move(reqStr));
         for (const int tok : instrumentTokens) {
             if (mode == MODE_LTP) {
                 subbedInstruments[tok] = MODES::LTP;
@@ -161,35 +243,39 @@ inline void ticker::setMode(
                 subbedInstruments[tok] = MODES::FULL;
             }
         };
-    } else {
-        throw kc::libException("not connected to websocket server");
-    };
 };
 
 inline void ticker::connectInternal() {
-    hub.connect(FMT(connectUrlFmt, key, token), nullptr, {},
-        static_cast<int>(connectTimeout), group);
+    if (stopRequested) { return; }
+    state = State::Connecting;
+    heartbeatCount = 0;
+    try {
+        session = std::make_shared<Session>(*this);
+        session->start();
+    } catch (const std::exception&) {
+        reportError(-1, "unable to configure streaming TLS");
+        invoke(onConnectError);
+        state = State::Stopped;
+    }
 };
 
 inline void ticker::reconnect() {
-    if (isConnected()) { return; };
-    isReconnecting = true;
-    reconnectTries++;
-
-    if (reconnectTries <= maxReconnectTries) {
-        std::this_thread::sleep_for(std::chrono::seconds(reconnectDelay));
-        reconnectDelay = (reconnectDelay * 2 > maxReconnectDelay) ?
-                             maxReconnectDelay :
-                             reconnectDelay * 2;
-
-        if (onTryReconnect) { onTryReconnect(this, reconnectTries); };
-        connectInternal();
-
-        if (isConnected()) { return; };
-    } else {
-        if (onReconnectFail) { onReconnectFail(this); };
-        isReconnecting = false;
-    };
+    if (stopRequested || isConnected()) { return; }
+    if (reconnectTries >= maxReconnectTries) {
+        state = State::Stopped;
+        invoke(onReconnectFail);
+        return;
+    }
+    state = State::Backoff;
+    const auto delay = std::min(reconnectDelay, maxReconnectDelay);
+    reconnectDelay = delay > maxReconnectDelay / 2 ? maxReconnectDelay : delay * 2;
+    retryTimer.expires_after(std::chrono::seconds(delay));
+    retryTimer.async_wait([this](boost::system::error_code error) {
+        if (error || stopRequested) { return; }
+        ++reconnectTries;
+        invoke(onTryReconnect, reconnectTries);
+        if (!stopRequested) { connectInternal(); }
+    });
 };
 
 inline void ticker::processTextMessage(const string& message) {
@@ -203,51 +289,92 @@ inline void ticker::processTextMessage(const string& message) {
             FMT("Cannot recognize websocket message type {0}", type));
     }
 
-    if (type == "order" && onOrderUpdate) {
-        onOrderUpdate(this, kc::postback(utils::json::extractObject(res)));
+    if (type == "order") {
+        const auto postback = kc::postback(utils::json::extractObject(res));
+        invoke(onOrderUpdate, postback);
     }
-    if (type == "message" && onMessage) { onMessage(this, message); };
-    if (type == "error" && onError) {
-        onError(this, 0, utils::json::extractString(res));
+    if (type == "message") {
+        utils::json::extractString(res);
+        invoke(onMessage, message);
+    };
+    if (type == "error") {
+        reportError(0, utils::json::extractString(res));
     };
 };
 
 template <typename T>
-T ticker::unpack(const std::vector<char>& bytes, size_t start, size_t end) {
-    // FIXME directly iterate over bytes instead of making a copy or reversing
+#if KITEPP_CPLUSPLUS >= 202002L
+    requires(std::integral<T> && !std::same_as<T, bool>)
+#endif
+T ticker::unpack(const BinaryView& bytes, size_t start, size_t end) {
+    if (start > end || end >= bytes.size() || end - start + 1 != sizeof(T)) {
+        throw libException("truncated binary field");
+    }
     T value;
-    std::vector<char> requiredBytes(bytes.begin() + static_cast<int64_t>(start),
-        bytes.begin() + static_cast<int64_t>(end) + 1);
-
-    // clang-format off
-        #ifndef WORDS_BIGENDIAN
-        std::reverse(requiredBytes.begin(), requiredBytes.end());
-        #endif
-    // clang-format on
+#if KITEPP_CPLUSPLUS >= 202002L
+    static_assert(std::endian::native == std::endian::little ||
+        std::endian::native == std::endian::big, "mixed-endian platforms are unsupported");
+    if constexpr (std::endian::native == std::endian::big) {
+        std::memcpy(&value, bytes.data() + start, sizeof(T));
+    } else {
+        std::array<char, sizeof(T)> field {};
+        for (size_t index = 0; index < sizeof(T); ++index) {
+            field[sizeof(T) - 1 - index] = bytes[start + index];
+        }
+        std::memcpy(&value, field.data(), sizeof(T));
+    }
+#else
+    // Preserve the protected C++17 decoder for rollback/parity verification.
+    std::vector<char> requiredBytes(sizeof(T));
+    for (size_t index = 0; index < sizeof(T); ++index) {
+#ifdef WORDS_BIGENDIAN
+        requiredBytes[index] = bytes[start + index];
+#else
+        requiredBytes[sizeof(T) - 1 - index] = bytes[start + index];
+#endif
+    }
 
     std::memcpy(&value, requiredBytes.data(), sizeof(T));
+#endif
     return value;
 };
 
-inline std::vector<std::vector<char>> ticker::splitPackets(
-    const std::vector<char>& bytes) {
-    const auto numberOfPackets = unpack<int16_t>(bytes, 0, 1);
-    std::vector<std::vector<char>> packets;
+inline std::vector<ticker::BinaryView> ticker::splitPackets(
+    const BinaryView& bytes) {
+    const auto numberOfPackets = unpack<uint16_t>(bytes, 0, 1);
+    std::vector<BinaryView> packets;
 
-    unsigned int packetLengthStartIdx = 2;
+    size_t packetLengthStartIdx = 2;
     for (int i = 1; i <= numberOfPackets; i++) {
-        unsigned int packetLengthEndIdx = packetLengthStartIdx + 1;
+        size_t packetLengthEndIdx = packetLengthStartIdx + 1;
         auto packetLength =
-            unpack<int16_t>(bytes, packetLengthStartIdx, packetLengthEndIdx);
+            unpack<uint16_t>(bytes, packetLengthStartIdx, packetLengthEndIdx);
+        if (packetLength > bytes.size() - packetLengthEndIdx - 1) {
+            throw libException("truncated binary packet");
+        }
+        if (packetLength != 8 && packetLength != 28 && packetLength != 32 &&
+            packetLength != 44 && packetLength != 184) {
+            throw libException("unrecognized binary packet size");
+        }
         packetLengthStartIdx = packetLengthEndIdx + packetLength + 1;
+#if KITEPP_CPLUSPLUS >= 202002L
+        packets.emplace_back(bytes.subspan(packetLengthEndIdx + 1, packetLength));
+#else
         packets.emplace_back(bytes.begin() + packetLengthEndIdx + 1,
             bytes.begin() + packetLengthStartIdx);
+#endif
     };
+    if (packetLengthStartIdx != bytes.size()) {
+        throw libException("unexpected trailing binary data");
+    }
     return packets;
 };
 
 inline std::vector<kc::tick> ticker::parseBinaryMessage(
     char* bytes, size_t size) {
+    if (!bytes || size < 2 || size > options.maxMessageBytes) {
+        throw libException("invalid binary message length");
+    }
     static constexpr uint8_t SEGMENT_MASK = 0xff;
     static constexpr double CDS_DIVISOR = 10000000.0;
     static constexpr double BSECDS_DIVISOR = 10000.0;
@@ -258,9 +385,12 @@ inline std::vector<kc::tick> ticker::parseBinaryMessage(
     static constexpr size_t QUOTE_PACKET_SIZE = 44;
     static constexpr size_t FULL_PACKET_SIZE = 184;
 
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    std::vector<std::vector<char>> packets =
-        splitPackets(std::vector<char>(bytes, bytes + size));
+#if KITEPP_CPLUSPLUS >= 202002L
+    const BinaryView frame(bytes, size);
+#else
+    const BinaryView frame(bytes, bytes + size);
+#endif
+    const auto packets = splitPackets(frame);
     if (packets.empty()) { return {}; };
 
     std::vector<kc::tick> ticks;
@@ -320,7 +450,7 @@ inline std::vector<kc::tick> ticker::parseBinaryMessage(
             Tick.ohlc.high = unpack<int32_t>(packet, 32, 35) / divisor;
             Tick.ohlc.low = unpack<int32_t>(packet, 36, 39) / divisor;
             Tick.ohlc.close = unpack<int32_t>(packet, 40, 43) / divisor;
-            Tick.netChange =
+            Tick.netChange = Tick.ohlc.close == 0 ? 0 :
                 (Tick.lastPrice - Tick.ohlc.close) * 100 / Tick.ohlc.close;
 
             // parse full mode
@@ -355,79 +485,26 @@ inline std::vector<kc::tick> ticker::parseBinaryMessage(
 };
 
 inline void ticker::resubInstruments() {
+    std::vector<int> instruments;
     std::vector<int> ltpInstruments;
     std::vector<int> quoteInstruments;
     std::vector<int> fullInstruments;
     for (const auto& i : subbedInstruments) {
+        instruments.push_back(i.first);
         if (i.second == MODES::LTP) { ltpInstruments.push_back(i.first); };
         if (i.second == MODES::QUOTE) { quoteInstruments.push_back(i.first); };
         if (i.second == MODES::FULL) { fullInstruments.push_back(i.first); };
     };
 
+    if (!instruments.empty()) {
+        utils::json::json<utils::json::JsonObject> request;
+        request.field("a", "subscribe");
+        request.field("v", instruments);
+        sendText(request.serialize());
+    }
     if (!ltpInstruments.empty()) { setMode(MODE_LTP, ltpInstruments); };
     if (!quoteInstruments.empty()) { setMode(MODE_QUOTE, quoteInstruments); };
     if (!fullInstruments.empty()) { setMode(MODE_FULL, fullInstruments); };
-};
-
-inline void ticker::assignCallbacks() {
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
-    group->onConnection(
-        [&](uWS::WebSocket<uWS::CLIENT>* Ws, uWS::HttpRequest /*req*/) {
-            ws = Ws;
-            //! not setting this time would prompt reconnecting immediately even
-            //! when conected since pongTime would be far back
-            lastPongTime = std::chrono::system_clock::now();
-
-            reconnectTries = 0;
-            reconnectDelay = initReconnectDelay;
-            isReconnecting = false;
-            if (!subbedInstruments.empty()) { resubInstruments(); };
-            if (onConnect) { onConnect(this); };
-        });
-
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
-    group->onMessage([&](uWS::WebSocket<uWS::CLIENT>* /*ws*/, char* message,
-                         size_t length, uWS::OpCode opCode) {
-        if (opCode == uWS::OpCode::BINARY && onTicks) {
-            if (length == 1) {
-                // is a heartbeat
-                lastBeatTime = std::chrono::system_clock::now();
-            } else {
-                onTicks(this, parseBinaryMessage(message, length));
-            };
-        } else if (opCode == uWS::OpCode::TEXT) {
-            processTextMessage(string(message, length));
-        };
-    });
-
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
-    group->onPong([&](uWS::WebSocket<uWS::CLIENT>* /*ws*/, char* /*message*/,
-                      size_t /*length*/) {
-        lastPongTime = std::chrono::system_clock::now();
-    });
-
-    group->onError([&](void*) {
-        if (onConnectError) { onConnectError(this); }
-        // close the non-responsive connection
-        if (isConnected()) { ws->close(utils::ws::ERROR_CODE::NO_REASON); };
-        if (enableReconnect) { reconnect(); };
-    });
-
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
-    group->onDisconnection([&](uWS::WebSocket<uWS::CLIENT>* /*ws*/, int code,
-                               char* reason, size_t length) {
-        ws = nullptr;
-
-        if (code != utils::ws::ERROR_CODE::NORMAL_CLOSURE) {
-            if (onError) { onError(this, code, string(reason, length)); };
-        };
-        if (onClose) { onClose(this, code, string(reason, length)); };
-        if (code != utils::ws::ERROR_CODE::NORMAL_CLOSURE) {
-            if (enableReconnect && !isReconnecting) { reconnect(); };
-        };
-    });
-
-    group->startAutoPing(static_cast<int>(pingInterval), pingMessage);
 };
 
 } // namespace kiteconnect

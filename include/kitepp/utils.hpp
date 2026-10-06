@@ -25,17 +25,26 @@
 
 #pragma once
 
+#include "config.hpp"
+
 #include <cstdint>
+#include <cmath>
+#include <charconv>
+#include <limits>
+#include <map>
+#include <locale>
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <sstream>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "exceptions.hpp"
 
 #include "cpp-httplib/httplib.h"
-#define FMT_HEADER_ONLY 1
 #include "fmt/include/fmt/args.h"
 #include "fmt/include/fmt/format.h"
 #include "rapidcsv/src/rapidcsv.h"
@@ -46,6 +55,7 @@
 #include "rapidjson/include/rapidjson/writer.h"
 
 // Check endieness of platform
+#if KITEPP_CPLUSPLUS < 202002L
 #if defined(_WIN32)
 // Do nothing (Assuming all modern Windows machines are little endian)
 #else // Windows check
@@ -70,6 +80,7 @@
 #endif /* __LITTLE_ENDIAN__ */
 #endif /* __BIG_ENDIAN__ */
 #endif // Windows check
+#endif // C++17 compatibility; C++20 decoding uses std::endian
 
 // NOLINTNEXTLINE(google-global-names-in-headers, misc-unused-using-decls)
 using fmt::literals::operator""_a;
@@ -86,6 +97,71 @@ using fmt::literals::operator""_a;
 namespace kiteconnect::internal::utils {
 using std::string;
 namespace rj = rapidjson;
+
+template <class Number, class = void>
+struct hasFromChars : std::false_type {};
+template <class Number>
+struct hasFromChars<Number, std::void_t<decltype(std::from_chars(
+    std::declval<const char*>(), std::declval<const char*>(),
+    std::declval<Number&>()))>> : std::true_type {};
+
+template <class Number>
+inline Number csvNumber(const string& value) {
+    if (value.empty()) { return Number {}; }
+    Number output {};
+    if constexpr (hasFromChars<Number>::value) {
+        const auto result = std::from_chars(
+            value.data(), value.data() + value.size(), output);
+        if (result.ec != std::errc {} || result.ptr != value.data() + value.size()) {
+            throw libException("invalid or out-of-range CSV number");
+        }
+    } else {
+        // Older libc++ lacks floating from_chars. Classic-locale, no-whitespace
+        // extraction keeps the same whole-field/range policy without global
+        // locale mutation or an intermediate floating-point rounding step.
+        static_assert(std::is_floating_point_v<Number>, "unsupported CSV number type");
+        if (value.find_first_not_of("0123456789eE+-.") != string::npos) {
+            throw libException("invalid CSV number");
+        }
+        std::istringstream input(value);
+        input.imbue(std::locale::classic());
+        input >> std::noskipws >> output;
+        // libc++ reports ERANGE even for representable subnormal strtod results.
+        // Accept those values, but still reject zero underflow and overflow.
+        const bool subnormal = output != 0 && std::isfinite(output) &&
+            std::abs(output) < std::numeric_limits<Number>::min();
+        if (input.fail() && subnormal) { input.clear(); }
+        if (value.front() == '+' || input.fail() ||
+            input.peek() != std::char_traits<char>::eof()) {
+            throw libException("invalid or out-of-range CSV number");
+        }
+        const auto mantissa = value.substr(0, value.find_first_of("eE"));
+        if (output == 0 && mantissa.find_first_of("123456789") != string::npos) {
+            throw libException("out-of-range CSV number");
+        }
+    }
+    if constexpr (std::is_floating_point_v<Number>) {
+        if (!std::isfinite(output)) { throw libException("non-finite CSV number"); }
+    }
+    return output;
+}
+
+inline string encodeURIComponent(const string& value) {
+    constexpr char hex[] = "0123456789ABCDEF";
+    string output;
+    for (unsigned char byte : value) {
+        if ((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+            (byte >= '0' && byte <= '9') || byte == '-' || byte == '_' ||
+            byte == '.' || byte == '~') {
+            output += static_cast<char>(byte);
+        } else {
+            output += '%';
+            output += hex[byte >> 4];
+            output += hex[byte & 15];
+        }
+    }
+    return output;
+}
 
 //! init_list doesn't have compare operator & gmock needs it
 using FmtArgs = std::vector<string>;
@@ -105,6 +181,43 @@ namespace json {
 
 using JsonObject = rj::GenericValue<rj::UTF8<>>::Object;
 using JsonArray = rj::GenericValue<rj::UTF8<>>::Array;
+
+inline JsonObject checkedObject(rj::Value& value) {
+    if (!value.IsObject()) { throw libException("expected JSON object"); }
+    return value.GetObject();
+}
+
+inline JsonArray checkedArray(rj::Value& value) {
+    if (!value.IsArray()) { throw libException("expected JSON array"); }
+    return value.GetArray();
+}
+
+inline rj::Value& requiredMember(rj::Value& value, const char* name) {
+    if (!value.IsObject() || !value.HasMember(name)) {
+        throw libException(FMT("missing JSON member: {0}", name));
+    }
+    return value[name];
+}
+
+inline JsonArray memberArray(const JsonObject& object, const char* name) {
+    auto member = object.FindMember(name);
+    if (member == object.MemberEnd() || !member->value.IsArray()) {
+        throw libException(FMT("expected JSON array: {0}", name));
+    }
+    return member->value.GetArray();
+}
+
+template <class Model>
+inline std::vector<Model> objectArray(const JsonObject& object,
+    const char* name) {
+    std::vector<Model> output;
+    auto member = object.FindMember(name);
+    if (member == object.MemberEnd()) { return output; }
+    auto array = checkedArray(member->value);
+    output.reserve(array.Size());
+    for (auto& value : array) { output.emplace_back(checkedObject(value)); }
+    return output;
+}
 template <class Res>
 using CustomObjectParser = std::function<Res(JsonObject&)>;
 template <class Res>
@@ -117,48 +230,46 @@ using JsonEncoder = std::function<void(const T&, rj::Value&)>;
 
 // FIXME templatize extract* methods
 inline JsonObject extractObject(rj::Document& doc) {
-    try {
-        return doc["data"].GetObject();
-    } catch (const std::exception& ex) { throw libException("invalid body"); }
+    return checkedObject(requiredMember(doc, "data"));
 }
 
 inline JsonArray extractArray(rj::Document& doc) {
-    try {
-        return doc["data"].GetArray();
-    } catch (const std::exception& ex) { throw libException("invalid body"); }
+    return checkedArray(requiredMember(doc, "data"));
 }
 
 inline bool extractBool(rj::Document& doc) {
-    try {
-        return doc["data"].GetBool();
-    } catch (const std::exception& ex) { throw libException("invalid body"); }
+    auto& data = requiredMember(doc, "data");
+    if (!data.IsBool()) { throw libException("expected boolean data"); }
+    return data.GetBool();
 }
 
 inline string extractString(rj::Document& doc) {
-    try {
-        return doc["data"].GetString();
-    } catch (const std::exception& ex) { throw libException("invalid body"); }
+    auto& data = requiredMember(doc, "data");
+    if (!data.IsString()) { throw libException("expected string data"); }
+    return string(data.GetString(), data.GetStringLength());
 }
 
 template <class Output, class Document = rj::Value::Object>
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 inline Output get(const Document& val, const char* name) {
-    static const auto exceptionString = [&name](const string& type) {
+    const auto exceptionString = [name](const string& type) {
         return FMT("type of {0} not is not {1}", name, type);
     };
 
+    if constexpr (std::is_base_of_v<rj::Value, Document>) {
+        if (!val.IsObject()) { throw libException("expected JSON object"); }
+    }
     auto it = val.FindMember(name);
     if (it != val.MemberEnd()) {
         if constexpr (!isVector<Output>::value) {
             if constexpr (std::is_same_v<std::decay_t<Output>, string>) {
-                if (it->value.IsString()) { return it->value.GetString(); };
+                if (it->value.IsString()) {
+                    return string(it->value.GetString(), it->value.GetStringLength());
+                };
                 if (it->value.IsNull()) { return ""; };
                 throw libException(exceptionString("string"));
             } else if constexpr (std::is_same_v<std::decay_t<Output>, double>) {
-                if (it->value.IsDouble()) { return it->value.GetDouble(); };
-                // if the sent value doesn't have a floating point (this time),
-                // GetDouble() will throw error
-                if (it->value.IsInt()) { return it->value.GetInt(); };
+                if (it->value.IsNumber()) { return it->value.GetDouble(); };
                 throw libException(exceptionString("double"));
             } else if constexpr (std::is_same_v<std::decay_t<Output>, int>) {
                 if (it->value.IsInt()) { return it->value.GetInt(); };
@@ -185,20 +296,14 @@ inline Output get(const Document& val, const char* name) {
                                       std::decay_t<typename Output::value_type>,
                                       string>) {
                         (v.IsString()) ?
-                            out.emplace_back(v.GetString()) :
+                            out.emplace_back(v.GetString(), v.GetStringLength()) :
                             throw libException(exceptionString("string"));
                     } else if constexpr (std::is_same_v<
                                              std::decay_t<
                                                  typename Output::value_type>,
                                              double>) {
-                        if (v.IsDouble()) {
+                        if (v.IsNumber()) {
                             out.emplace_back(v.GetDouble());
-                            continue;
-                        };
-                        // if the sent value doesn't have a floating point (this
-                        // time), GetDouble() will throw error
-                        if (v.IsInt()) {
-                            out.emplace_back(v.GetInt());
                             continue;
                         };
                         throw libException(exceptionString("array of doubles"));
@@ -217,7 +322,7 @@ inline Output get(const Document& val, const char* name) {
 
 template <class Val, class Output>
 Output get(const rj::Value::Object& val, const char* name) {
-    static const auto exceptionString = [&name](const string& type) {
+    const auto exceptionString = [name](const string& type) {
         return FMT("type of {0} not is not {1}", name, type);
     };
 
@@ -244,7 +349,7 @@ Output get(const rj::Value::Object& val, const char* name) {
 
 template <class Val>
 bool get(const rj::Value::Object& val, rj::Value& out, const char* name) {
-    static const auto exceptionString = [&name](const string& type) {
+    const auto exceptionString = [name](const string& type) {
         return FMT("type of {0} not is not {1}", name, type);
     };
 
@@ -300,9 +405,14 @@ Res parse(
 }
 
 inline bool parse(rj::Document& dom, const string& str) {
-    rj::ParseResult result = dom.Parse(str.c_str());
+    if (str.find('\0') != string::npos) {
+        throw libException("embedded NUL in JSON input");
+    }
+    rj::ParseResult result =
+        dom.Parse<rj::kParseValidateEncodingFlag>(str.data(), str.size());
     if (result == nullptr) {
-        throw libException(FMT("failed to parse json string: {0}", str));
+        throw libException(FMT("invalid JSON at byte {0} (code {1})",
+            result.Offset(), static_cast<unsigned>(result.Code())));
     };
     return true;
 };
@@ -321,7 +431,7 @@ class json {
         if constexpr (std::is_same_v<T, JsonObject>) {
             dom.SetObject();
         } else {
-            dom.StartArray();
+            dom.SetArray();
         }
     };
 
@@ -332,10 +442,20 @@ class json {
 
         if constexpr (std::is_same_v<std::decay_t<Value>, string>) {
             buffer.SetString(value.c_str(), value.size(), allocater);
+        } else if constexpr (std::is_convertible_v<const Value&, std::string_view>) {
+            const std::string_view text(value);
+            buffer.SetString(text.data(), text.size(), allocater);
+        } else if constexpr (std::is_same_v<std::decay_t<Value>, bool>) {
+            buffer.SetBool(value);
+        } else if constexpr (std::is_unsigned_v<std::decay_t<Value>>) {
+            buffer.SetUint64(value);
         } else if constexpr (std::is_integral_v<std::decay_t<Value>>) {
             buffer.SetInt64(value);
         } else if constexpr (std::is_floating_point_v<std::decay_t<Value>>) {
+            if (!std::isfinite(value)) { throw libException("non-finite JSON number"); }
             buffer.SetDouble(value);
+        } else {
+            static_assert(!sizeof(Value), "unsupported JSON scalar type");
         };
 
         if (docOverride == nullptr) {
@@ -354,6 +474,9 @@ class json {
         rj::Value arrayBuffer(rj::kArrayType);
         for (const auto& i : values) {
             if constexpr (std::is_fundamental_v<std::decay_t<Value>>) {
+                if constexpr (std::is_floating_point_v<Value>) {
+                    if (!std::isfinite(i)) { throw libException("non-finite JSON number"); }
+                }
                 arrayBuffer.PushBack(i, allocater);
             } else {
                 rj::Value objectBuffer(rj::kObjectType);
@@ -391,7 +514,35 @@ class json {
 
 namespace http {
 
-using Params = httplib::Params;
+// Preserve the SDK's original parameter type independently of the transport's
+// newer insertion-ordered container. Convert only at the HTTP adapter boundary.
+using Params = std::multimap<string, string>;
+
+inline void configureClient(httplib::Client& client) {
+    // Configure once before use, never mutate client options during a send.
+    client.set_path_encode(false);
+}
+
+inline string encodeRequestTarget(const string& path) {
+    if (path.empty() || path.front() != '/' || path.find('\0') != string::npos) {
+        throw libException("invalid HTTP request target");
+    }
+    constexpr char hex[] = "0123456789ABCDEF";
+    string output;
+    for (unsigned char byte : path) {
+        // Retain the qualified legacy encoding (including literal '+') and
+        // already-encoded components. Controls are never emitted on the wire.
+        if (byte <= 0x20 || byte >= 0x7f || byte == '+' || byte == '\'' ||
+            byte == ',' || byte == ';') {
+            output += '%';
+            output += hex[byte >> 4];
+            output += hex[byte & 15];
+        } else {
+            output += static_cast<char>(byte);
+        }
+    }
+    return output;
+}
 
 namespace code {
 constexpr uint16_t OK = 200;
@@ -457,16 +608,26 @@ class response {
   private:
     void parse(uint16_t code, const string& body, bool json) {
         if (json) {
-            json::parse(data, body);
-            if (code != static_cast<uint16_t>(code::OK)) {
-                string status;
-                status = utils::json::get<string, rj::Document>(data, "status");
-                errorType =
-                    utils::json::get<string, rj::Document>(data, "error_type");
-                message =
-                    utils::json::get<string, rj::Document>(data, "message");
-                if (status != "success") { error = true; };
-            };
+            try {
+                json::parse(data, body);
+            } catch (const libException&) {
+                if (code == code::OK) { throw; }
+                error = true;
+                message = "non-JSON HTTP error response";
+                return;
+            }
+            json::checkedObject(data);
+            const auto status = utils::json::get<string, rj::Document>(data, "status");
+            if (status != "success" && status != "error" &&
+                !(status.empty() && code == code::OK && data.HasMember("data"))) {
+                throw libException("missing or invalid response status");
+            }
+            error = code != code::OK || status == "error";
+            if (error) {
+                const auto type = utils::json::get<string, rj::Document>(data, "error_type");
+                if (!type.empty()) { errorType = type; }
+                message = utils::json::get<string, rj::Document>(data, "message");
+            }
         } else {
             if (code != static_cast<uint16_t>(code::OK)) { error = true; };
             rawBody = body;
@@ -478,6 +639,13 @@ struct request {
 
     // NOLINTNEXTLINE(readability-function-cognitive-complexity)
     response send(httplib::Client& client) const {
+        // The SDK owns target encoding. Its client is configured once to avoid
+        // a second provider normalization step (see configureClient).
+        const string target = encodeRequestTarget(path);
+        httplib::Params form;
+        for (const auto& parameter : body) {
+            form.emplace(parameter.first, parameter.second);
+        }
         const httplib::Headers headers = { { "Authorization", authToken } };
         uint16_t code = 0;
         string data;
@@ -486,7 +654,7 @@ struct request {
         // pointer causes segfault
         switch (method) {
             case utils::http::METHOD::GET:
-                if (auto res = client.Get(path, headers)) {
+                if (auto res = client.Get(target, headers)) {
                     code = res->status;
                     data = res->body;
                 } else {
@@ -496,7 +664,7 @@ struct request {
                 break;
             case utils::http::METHOD::POST:
                 if (contentType != CONTENT_TYPE::JSON) {
-                    if (auto res = client.Post(path, headers, body)) {
+                    if (auto res = client.Post(target, headers, form)) {
                         code = res->status;
                         data = res->body;
                     } else {
@@ -504,7 +672,7 @@ struct request {
                             httplib::to_string(res.error())));
                     }
                 } else {
-                    if (auto res = client.Post(path, headers, serializedBody,
+                    if (auto res = client.Post(target, headers, serializedBody,
                             "application/json")) {
                         code = res->status;
                         data = res->body;
@@ -516,7 +684,7 @@ struct request {
                 break;
             case utils::http::METHOD::PUT:
                 if (contentType != CONTENT_TYPE::JSON) {
-                    if (auto res = client.Put(path, headers, body)) {
+                    if (auto res = client.Put(target, headers, form)) {
                         code = res->status;
                         data = res->body;
                     } else {
@@ -524,7 +692,7 @@ struct request {
                             httplib::to_string(res.error())));
                     }
                 } else {
-                    if (auto res = client.Put(path, headers, serializedBody,
+                    if (auto res = client.Put(target, headers, serializedBody,
                             "application/json")) {
                         code = res->status;
                         data = res->body;
@@ -535,7 +703,7 @@ struct request {
                 }
                 break;
             case utils::http::METHOD::DEL:
-                if (auto res = client.Delete(path, headers)) {
+                if (auto res = client.Delete(target, headers)) {
                     code = res->status;
                     data = res->body;
                 } else {

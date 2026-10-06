@@ -55,7 +55,7 @@ int main() {
 
         // std::string accessToken =
         //     Kite.generateSession(reqToken, apiSecret).tokens.accessToken;
-        // std::cout << "access token: " << accessToken << "\n";
+        // Store accessToken securely; do not print or commit it.
         //! [obtaining access token]
 
         //! [settting access token]

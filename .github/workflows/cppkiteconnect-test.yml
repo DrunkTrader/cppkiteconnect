@@ -1,55 +1,107 @@
 name: CPPKiteConnect-test
-
-# Get triggered on
 on:
   push:
-    branches: [main, v2]
   pull_request:
-    branches: [main, v2]
-  release:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  # This job builds and runs unit tests
   build-and-test:
-    # Define a strategy
     strategy:
-      # Matrix of configs to test
+      fail-fast: false
       matrix:
-        config:
-          - { name: ubuntu, os: ubuntu-latest }
-          - { name: macOS, os: macos-latest }
-          #TODO - { name: windows, os: windows-latest }
-
-    name: ${{ matrix.config.name }}
-    runs-on: ${{ matrix.config.os }}
-
+        include:
+          - { os: ubuntu-24.04, compiler: g++, stdlib: native, standard: 20, sanitizer: false, cmake: 3.18.4.post1 }
+          - { os: ubuntu-24.04, compiler: g++, stdlib: native, standard: 20, sanitizer: false, cmake: 4.4.4 }
+          - { os: ubuntu-24.04, compiler: g++, stdlib: native, standard: 17, sanitizer: false, cmake: 4.4.4 }
+          - { os: ubuntu-24.04, compiler: g++-14, stdlib: native, standard: 20, sanitizer: false, cmake: 4.4.4 }
+          - { os: ubuntu-24.04, compiler: clang++-18, stdlib: native, standard: 20, sanitizer: true, cmake: 4.4.4 }
+          # Ubuntu libc++/libc++abi 18 has a reproduced exception-allocation
+          # mismatch under ASan. Keep its normal compatibility check; use 20
+          # for the qualified libc++ sanitizer lane without suppressing errors.
+          - { os: ubuntu-24.04, compiler: clang++-18, stdlib: libc++, standard: 20, sanitizer: false, cmake: 4.4.4 }
+          - { os: ubuntu-24.04, compiler: clang++-20, stdlib: libc++, standard: 20, sanitizer: true, cmake: 4.4.4 }
+          - { os: macos-latest, compiler: clang++, stdlib: native, standard: 20, sanitizer: false, cmake: 4.4.4 }
+    runs-on: ${{ matrix.os }}
     steps:
-      # Check out repo with submodules
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          submodules: true
-
-      # Build & test on Linux
-      - name: Build and test on (Ubuntu) Linux
-        if: startsWith(matrix.config.name, 'ubuntu')
+          submodules: recursive
+      - name: Linux package prerequisites
+        if: runner.os == 'Linux'
         run: |
-          sudo apt update && sudo apt -y install libssl-dev zlib1g-dev git g++ build-essential cmake googletest google-mock libgtest-dev libgmock-dev doxygen
-          git clone https://github.com/hoytech/uWebSockets.git
-          cd uWebSockets && make && sudo make install && cd ..
-          mkdir build && cd build
-          cmake .. -DBUILD_EXAMPLES=ON -DBUILD_TESTS=ON && make && make test ARGS="-V"
-
-      # Build & test on macOS
-      - name: Build and test on macOS
-        if: startsWith(matrix.config.name, 'macOS')
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev libboost1.83-dev libgtest-dev libgmock-dev python3 openssl clang-18 libclang-rt-18-dev libc++-18-dev libc++abi-18-dev
+      - name: Newer GCC package provider
+        if: matrix.compiler == 'g++-14'
+        run: sudo apt-get install -y g++-14
+      - name: Qualified libc++ sanitizer provider
+        if: matrix.compiler == 'clang++-20'
+        run: sudo apt-get install -y clang-20 libclang-rt-20-dev libc++-20-dev libc++abi-20-dev
+      - name: macOS package prerequisites
+        if: runner.os == 'macOS'
         run: |
-          brew extract --version=1.10.0 googletest homebrew/cask-versions && brew install googletest@1.10.0 libuv
-          export PKG_CONFIG_PATH="/usr/local/opt/openssl/lib/pkgconfig"
-
-          curl -L https://github.com/hoytech/uWebSockets/archive/refs/tags/v0.14.8.tar.gz > uWebSocketsv-0.14.8.tar.gz
-          tar -xvf uWebSocketsv-0.14.8.tar.gz
-          cd uWebSockets-0.14.8
-          make && make installDarwin && cd ..
-
-          mkdir build && cd build
-          cmake .. -DBUILD_EXAMPLES=ON -DBUILD_TESTS=ON && make && make test ARGS="-V"
+          brew install boost openssl@3 googletest
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix openssl@3);$(brew --prefix boost);$(brew --prefix googletest)" >> "$GITHUB_ENV"
+          echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+      - name: Pinned CMake tool
+        run: |
+          python3 -m pip install --no-cache-dir --only-binary=:all: --target "$RUNNER_TEMP/cmake-tools" "cmake==${{ matrix.cmake }}"
+          echo "$RUNNER_TEMP/cmake-tools/cmake/data/bin" >> "$GITHUB_PATH"
+      - name: Matching libc++ test provider
+        if: matrix.stdlib == 'libc++'
+        run: |
+          cmake -S /usr/src/googletest -B "$RUNNER_TEMP/gtest-build" -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DCMAKE_CXX_STANDARD=${{ matrix.standard }} -DCMAKE_CXX_EXTENSIONS=OFF -DCMAKE_CXX_FLAGS=-stdlib=libc++ -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/gtest-install"
+          cmake --build "$RUNNER_TEMP/gtest-build" --parallel 2
+          cmake --install "$RUNNER_TEMP/gtest-build"
+          echo "GTest_DIR=$RUNNER_TEMP/gtest-install/lib/cmake/GTest" >> "$GITHUB_ENV"
+      - name: Configure
+        env:
+          CXX: ${{ matrix.compiler }}
+          SANITIZER: ${{ matrix.sanitizer }}
+          STDLIB: ${{ matrix.stdlib }}
+        run: |
+          flags=""
+          if [ "$SANITIZER" = true ]; then
+            flags="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          fi
+          if [ "$STDLIB" = 'libc++' ]; then
+            flags="$flags -stdlib=libc++"
+          fi
+          cmake -S . -B build -DKITEPP_CXX_STANDARD=${{ matrix.standard }} -DBUILD_EXAMPLES=ON -DBUILD_TESTS=ON -DKITEPP_CHECK_HEADERS=ON -DGTest_DIR="$GTest_DIR" -DCMAKE_CXX_FLAGS="$flags" -DCMAKE_EXE_LINKER_FLAGS="$flags"
+      - name: Build and offline tests
+        env:
+          ASAN_OPTIONS: detect_stack_use_after_return=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          cmake --build build --parallel 2
+          cmake -E chdir build ctest --output-on-failure
+      - name: Relocated package consumer
+        env:
+          CXX: ${{ matrix.compiler }}
+          STDLIB: ${{ matrix.stdlib }}
+        run: |
+          flags=""
+          if [ "$STDLIB" = 'libc++' ]; then
+            flags="-stdlib=libc++"
+          fi
+          cmake --install build --prefix "$RUNNER_TEMP/kitepp-install"
+          mv "$RUNNER_TEMP/kitepp-install" "$RUNNER_TEMP/kitepp-relocated"
+          cmake -S tests/consumer -B "$RUNNER_TEMP/consumer" -DKITEPP_CONSUMPTION=installed -DCMAKE_CXX_STANDARD=11 -DCMAKE_CXX_FLAGS="$flags" -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/kitepp-relocated;$CMAKE_PREFIX_PATH"
+          cmake --build "$RUNNER_TEMP/consumer" --parallel 2
+          cmake -E chdir "$RUNNER_TEMP/consumer" ctest --output-on-failure
+          cmake -S tests/consumer/components -B "$RUNNER_TEMP/components-no-boost" -DKITEPP_EXPECT_TICKER=OFF -DCMAKE_DISABLE_FIND_PACKAGE_Boost=ON -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/kitepp-relocated;$CMAKE_PREFIX_PATH"
+  documentation:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - name: Documentation prerequisites
+        run: sudo apt-get update && sudo apt-get install -y cmake doxygen graphviz libssl-dev
+      - name: Generate API documentation
+        run: |
+          cmake -S . -B docs-build -DBUILD_DOCS=ON -DKITEPP_ENABLE_TICKER=OFF
+          cmake --build docs-build --target docs

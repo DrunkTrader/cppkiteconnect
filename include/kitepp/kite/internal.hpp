@@ -29,7 +29,6 @@
 #include <type_traits>
 
 #include "kitepp/exceptions.hpp"
-#include "uri-parser/include/parser.hpp"
 
 #include "../kite.hpp"
 #include "../utils.hpp"
@@ -49,19 +48,20 @@ inline string kite::encodeSymbolsList(const std::vector<string>& symbols) {
         string ticker = symbol.substr(colonPos + 1);
 
         symbolsList.append(
-            FMT("i={0}:{1}&", exchange, parser::encodeUrl(ticker)));
+            FMT("i={0}:{1}&", utils::encodeURIComponent(exchange),
+                utils::encodeURIComponent(ticker)));
     };
 
     if (!symbolsList.empty()) { symbolsList.pop_back(); };
     return symbolsList;
 }
 
-// GMock requires mock methods to be virtual (hi-perf dep injection is not
-// possible here ಥ﹏ಥ). Macro used to eliminate vptr overhead.
+// Stable production seam used by mocks; all translation units share one layout.
 inline utils::http::response kite::sendReq(
     const utils::http::endpoint& endpoint, const utils::http::Params& body,
     const utils::FmtArgs& fmtArgs) {
     if (endpoint.contentType == utils::http::CONTENT_TYPE::JSON) {
+        if (body.empty()) { throw libException("missing JSON request body"); }
         return utils::http::request { endpoint.method, endpoint.Path(fmtArgs),
             getAuth(), body, endpoint.contentType, endpoint.responseType,
             body.begin()->second }
@@ -79,7 +79,8 @@ inline Res kite::callApi(const string& service, const utils::http::Params& body,
     utils::http::response res = sendReq(endpoints.at(service), body, fmtArgs);
     if (!res) {
         kiteconnect::internal::throwException(
-            res.errorType, res.code, res.message);
+            res.errorType, res.code, res.message
+        );
     }
     return utils::json::parse<Res, Data, UseCustomParser>(
         res.data, customParser);

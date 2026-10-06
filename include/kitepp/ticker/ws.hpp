@@ -34,6 +34,9 @@
 #include <ios>
 #include <iostream>
 #include <limits>
+#include <memory>
+#include <deque>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -48,7 +51,17 @@
 #include "rapidjson/include/rapidjson/document.h"
 #include "rapidjson/include/rapidjson/rapidjson.h"
 #include "rapidjson/include/rapidjson/writer.h"
-#include <uWS/uWS.h>
+#include <boost/asio.hpp>
+#include <boost/asio/ssl.hpp>
+#include <boost/beast.hpp>
+#include <boost/beast/websocket/ssl.hpp>
+
+#if KITEPP_CPLUSPLUS >= 202002L
+#include <array>
+#include <bit>
+#include <concepts>
+#include <span>
+#endif
 
 namespace kiteconnect {
 
@@ -58,6 +71,16 @@ static_assert(std::numeric_limits<double>::is_iec559,
 
 using std::string;
 namespace kc = kiteconnect;
+
+/// Connection options. Credentials remain separate and are never logged.
+struct tickerOptions {
+    string host = "ws.kite.trade";
+    string port = "443";
+    string caFile;
+    std::chrono::milliseconds closeTimeout { 500 };
+    size_t maxMessageBytes = 1024 * 1024;
+    size_t maxQueuedBytes = 256 * 1024;
+};
 
 ///
 /// \brief \a ticker wraps around the websocket API provided by KiteConnect and
@@ -111,18 +134,6 @@ class ticker {
     /// @brief Called when connection is closed.
     std::function<void(ticker* ws, int code, const string& message)> onClose;
 
-    /**
-     * @brief Construct a new kiteWS object
-     *
-     * @param apikey API key
-     * @param connecttimeout Connection timeout
-     * @param enablereconnect Should be set to `true` for enabling reconnection
-     * @param maxreconnectdelay Maximum reconnect delay for reconnection
-     * @param maxreconnecttries Maximum reconnection attempts after which
-     * onReconnectFail will be called and no further attempt to reconnect will
-     * be made.
-     */
-
     ///
     /// \brief Construct a new ticker object. All durations are in seconds.
     ///
@@ -140,6 +151,18 @@ class ticker {
         bool EnableReconnect = false,
         unsigned int MaxReconnectDelay = DEFAULT_MAX_RECONNECT_DELAY,
         unsigned int MaxReconnectTries = DEFAULT_MAX_RECONNECT_TRIES);
+
+    ticker(string Key, tickerOptions options,
+        unsigned int ConnectTimeout = DEFAULT_CONNECT_TIMEOUT,
+        bool EnableReconnect = false,
+        unsigned int MaxReconnectDelay = DEFAULT_MAX_RECONNECT_DELAY,
+        unsigned int MaxReconnectTries = DEFAULT_MAX_RECONNECT_TRIES);
+
+    ~ticker() noexcept;
+    ticker(const ticker&) = delete;
+    ticker& operator=(const ticker&) = delete;
+    ticker(ticker&&) = delete;
+    ticker& operator=(ticker&&) = delete;
 
     ///
     /// @brief Set the API key.
@@ -220,8 +243,10 @@ class ticker {
 
   private:
     friend class tickerTest_binaryParsingTest_Test;
-    const string connectUrlFmt =
-        "wss://ws.kite.trade/?api_key={0}&access_token={1}";
+    friend class tickerTest_malformedBinaryTest_Test;
+    friend class tickerTest_packetModesTest_Test;
+    friend class tickerTest_textParsingTest_Test;
+    friend class tickerDecoderBenchmark;
     string key;
     string token;
     enum class SEGMENTS : int
@@ -244,26 +269,29 @@ class ticker {
     };
     const MODES DEFAULT_MODE = MODES::QUOTE;
     std::unordered_map<int, MODES> subbedInstruments;
-    uWS::Hub hub;
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
-    uWS::Group<uWS::CLIENT>* group;
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
-    uWS::WebSocket<uWS::CLIENT>* ws = nullptr;
+    enum class State { Ready, Connecting, Open, Backoff, Stopping, Stopped };
+    struct Session;
+    boost::asio::io_context loop;
+    boost::asio::steady_timer retryTimer { loop };
+    std::shared_ptr<Session> session;
+    tickerOptions options;
+    State state = State::Ready;
+    std::atomic<bool> stopRequested { false };
+    std::atomic<bool> connected { false };
+    std::atomic<bool> running { false };
+    std::atomic<int64_t> heartbeatCount { 0 };
+    std::thread::id owner;
+    mutable std::mutex ownerMutex;
     static constexpr unsigned int DEFAULT_CONNECT_TIMEOUT = 5;      // s
     static constexpr unsigned int DEFAULT_MAX_RECONNECT_DELAY = 60; // s
     static constexpr unsigned int DEFAULT_MAX_RECONNECT_TRIES = 30;
     const unsigned int connectTimeout = DEFAULT_CONNECT_TIMEOUT; // ms
-    const string pingMessage;
-    const unsigned int pingInterval = 3000; // ms
     const bool enableReconnect = false;
     const unsigned int initReconnectDelay = 2; // s
     unsigned int reconnectDelay = initReconnectDelay;
     const unsigned int maxReconnectDelay = DEFAULT_MAX_RECONNECT_DELAY; // s
     unsigned int reconnectTries = 0;
     const unsigned int maxReconnectTries = DEFAULT_MAX_RECONNECT_TRIES;
-    std::atomic<bool> isReconnecting { false };
-    std::chrono::time_point<std::chrono::system_clock> lastPongTime;
-    std::chrono::time_point<std::chrono::system_clock> lastBeatTime;
 
     void connectInternal();
 
@@ -271,15 +299,39 @@ class ticker {
 
     void processTextMessage(const string& message);
 
+#if KITEPP_CPLUSPLUS >= 202002L
+    using BinaryView = std::span<const char>;
     template <typename T>
-    T unpack(const std::vector<char>& bytes, size_t start, size_t end);
+        requires(std::integral<T> && !std::same_as<T, bool>)
+#else
+    using BinaryView = std::vector<char>;
+    template <typename T>
+#endif
+    T unpack(const BinaryView& bytes, size_t start, size_t end);
 
-    std::vector<std::vector<char>> splitPackets(const std::vector<char>& bytes);
+    std::vector<BinaryView> splitPackets(const BinaryView& bytes);
 
     std::vector<kc::tick> parseBinaryMessage(char* bytes, size_t size);
 
     void resubInstruments();
 
-    void assignCallbacks();
+    void stopInternal();
+    void requireOwner() const;
+    void sendText(string message);
+    void validateTokens(const std::vector<int>& tokens) const;
+    void reportError(int code, const string& message) noexcept;
+
+    template <class Callback, class... Args>
+    void invoke(const Callback& callback, Args&&... args) noexcept {
+        if (!callback) { return; }
+        try {
+            const auto copy = callback;
+            copy(this, std::forward<Args>(args)...);
+        } catch (...) {
+            // Error reporting cannot recursively reenter a throwing onError.
+            reportError(-1, "user callback threw an exception");
+            stop();
+        }
+    }
 };
 } // namespace kiteconnect

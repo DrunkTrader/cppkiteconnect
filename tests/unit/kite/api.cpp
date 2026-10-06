@@ -120,3 +120,15 @@ TEST(kiteTest, invalidateSessionTest) {
     const bool RESULT = Kite.invalidateSession();
     EXPECT_EQ(RESULT, true);
 };
+
+namespace kiteconnect {
+TEST(kiteProtection, authHeaderTracksCurrentKey) {
+    kite client("old-key");
+    client.setAccessToken("first-token");
+    EXPECT_EQ(client.getAuth(), "token old-key:first-token");
+    client.setApiKey("new-key");
+    EXPECT_EQ(client.getAuth(), "token new-key:first-token");
+    client.setAccessToken("second-token");
+    EXPECT_EQ(client.getAuth(), "token new-key:second-token");
+}
+} // namespace kiteconnect

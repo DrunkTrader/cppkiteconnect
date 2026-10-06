@@ -29,10 +29,15 @@
 #include <vector>
 
 #include "../kite.hpp"
+#include "internal.hpp"
 #include "../utils.hpp"
 
 namespace kiteconnect {
 inline string kite::placeOrder(const placeOrderParams& params) {
+    if (params.quantity <= 0 || params.variety.empty() ||
+        params.exchange.empty() || params.symbol.empty() ||
+        params.transactionType.empty() || params.product.empty() ||
+        params.orderType.empty()) { throw libException("incomplete order parameters"); }
     // required parameters
     utils::http::Params bodyParams = {
         { "exchange", params.exchange },
@@ -100,7 +105,7 @@ inline std::vector<order> kite::orders() {
     return callApi<std::vector<order>, utils::json::JsonArray, true>(
         "orders", {}, {}, [](utils::json::JsonArray& data) {
             std::vector<order> Orders;
-            for (auto& i : data) { Orders.emplace_back(i.GetObject()); }
+            for (auto& i : data) { Orders.emplace_back(utils::json::checkedObject(i)); }
             return Orders;
         });
 };
@@ -109,7 +114,7 @@ inline std::vector<order> kite::orderHistory(const string& orderId) {
     return callApi<std::vector<order>, utils::json::JsonArray, true>(
         "order.info", {}, { orderId }, [](utils::json::JsonArray& data) {
             std::vector<order> history;
-            for (auto& i : data) { history.emplace_back(i.GetObject()); }
+            for (auto& i : data) { history.emplace_back(utils::json::checkedObject(i)); }
             return history;
         });
 };
@@ -118,7 +123,7 @@ inline std::vector<trade> kite::trades() {
     return callApi<std::vector<trade>, utils::json::JsonArray, true>(
         "trades", {}, {}, [](utils::json::JsonArray& data) {
             std::vector<trade> trades;
-            for (auto& i : data) { trades.emplace_back(i.GetObject()); }
+            for (auto& i : data) { trades.emplace_back(utils::json::checkedObject(i)); }
             return trades;
         });
 };
@@ -127,7 +132,7 @@ inline std::vector<trade> kite::orderTrades(const string& orderId) {
     return callApi<std::vector<trade>, utils::json::JsonArray, true>(
         "order.trades", {}, { orderId }, [](utils::json::JsonArray& data) {
             std::vector<trade> trades;
-            for (auto& i : data) { trades.emplace_back(i.GetObject()); }
+            for (auto& i : data) { trades.emplace_back(utils::json::checkedObject(i)); }
             return trades;
         });
 };

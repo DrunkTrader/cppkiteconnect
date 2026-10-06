@@ -123,17 +123,10 @@ struct quote {
         explicit mDepth(const rj::Value::Object& val) { parse(val); };
 
         void parse(const rj::Value::Object& val) {
-            rj::Value buyDepthVal(rj::kArrayType);
-            utils::json::get<utils::json::JsonArray>(val, buyDepthVal, "buy");
-            for (auto& i : buyDepthVal.GetArray()) {
-                buy.emplace_back(i.GetObject());
-            };
-
-            rj::Value sellDepthVal(rj::kArrayType);
-            utils::json::get<utils::json::JsonArray>(val, sellDepthVal, "sell");
-            for (auto& i : sellDepthVal.GetArray()) {
-                sell.emplace_back(i.GetObject());
-            };
+            auto parsedBuy = utils::json::objectArray<depth>(val, "buy");
+            auto parsedSell = utils::json::objectArray<depth>(val, "sell");
+            buy = std::move(parsedBuy);
+            sell = std::move(parsedSell);
         }
 
         std::vector<depth> buy;
@@ -196,11 +189,13 @@ struct historicalData {
     explicit historicalData(const rj::Value::Array& val) { parse(val); };
 
     void parse(const rj::Value::Array& val) {
-        // if the sent value doesn't have a floating point (this time),
-        // GetDouble() will throw error
+        if (val.Size() < 6 || !val[DATETIME_IDX].IsString() ||
+            !val[VOLUME_IDX].IsInt64() ||
+            (val.Size() > OI_IDX && !val[OI_IDX].IsInt64())) {
+            throw libException("invalid historical candle");
+        }
         static auto getDouble = [](rj::Value& val) -> double {
-            if (val.IsDouble()) { return val.GetDouble(); };
-            if (val.IsInt()) { return val.GetInt(); };
+            if (val.IsNumber()) { return val.GetDouble(); };
             throw libException("type isn't double");
         };
         datetime = val[DATETIME_IDX].GetString();
@@ -209,7 +204,7 @@ struct historicalData {
         low = getDouble(val[LOW_IDX]);
         close = getDouble(val[CLOSE_IDX]);
         volume = val[VOLUME_IDX].GetInt64();
-        if (val.Size() > OI_IDX) { OI = val[OI_IDX].GetInt64(); };
+        OI = val.Size() > OI_IDX ? val[OI_IDX].GetInt64() : -1;
     };
 
     int64_t volume = -1;
@@ -234,14 +229,15 @@ struct instrument {
     explicit instrument(const std::vector<string>& row) { parse(row); };
 
     void parse(const std::vector<string>& tokens) {
+        if (tokens.size() < 12) { throw libException("short instrument CSV row"); }
         static const auto toInt = [](const string& str) -> int {
-            return (str.empty()) ? 0 : std::stoi(str);
+            return utils::csvNumber<int>(str);
         };
         static const auto toUint32 = [](const string& str) -> uint32_t {
-            return (str.empty()) ? 0 : std::stoul(str);
+            return utils::csvNumber<uint32_t>(str);
         };
         static const auto toDouble = [](const string& str) -> double {
-            return (str.empty()) ? 0.0 : std::stod(str);
+            return utils::csvNumber<double>(str);
         };
 
         instrumentToken = toUint32(tokens[INSTRUMENT_TOKEN_IDX]);

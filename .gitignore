@@ -12,6 +12,7 @@ compile_commands.json
 !docs/mainpage.dox
 !docs/CMakeLists.txt
 
+
 #downloaded dependancies
 deps/**
 !deps/CMakeLists.txt

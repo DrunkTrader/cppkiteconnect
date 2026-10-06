@@ -24,6 +24,8 @@
  */
 #pragma once
 
+#include "config.hpp"
+
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -48,6 +50,8 @@ namespace utils = kc::internal::utils;
 class kite {
 
   public:
+    virtual ~kite() = default;
+
     ///
     /// \brief Construct a new kite object.
     ///
@@ -616,6 +620,7 @@ class kite {
         const std::vector<marginsParams>& params, bool considerPositions);
 
   private:
+    friend class kiteProtection_authHeaderTracksCurrentKey_Test;
     static string encodeSymbolsList(const std::vector<string>& symbols);
 
     string getAuth() const;
@@ -648,7 +653,7 @@ class kite {
         { "order.modify", { utils::http::METHOD::PUT, "/orders/{0}/{1}" } },
         { "order.cancel", { utils::http::METHOD::DEL, "/orders/{0}/{1}" } },
         { "order.cancel.bo", { utils::http::METHOD::DEL,
-                                 "/orders/{0}/{1}?parent_order_id={1}" } },
+                                 "/orders/{0}/{1}?parent_order_id={2}" } },
         { "order.trades", { utils::http::METHOD::GET, "/orders/{0}/trades" } },
         { "orders", { utils::http::METHOD::GET, "/orders" } },
         { "trades", { utils::http::METHOD::GET, "/trades" } },
@@ -710,21 +715,8 @@ class kite {
     httplib::Client client;
 
   protected:
-#ifdef KITE_UNIT_TEST
     virtual utils::http::response sendReq(const utils::http::endpoint& endpoint,
         const utils::http::Params& body, const utils::FmtArgs& fmtArgs);
-#else
-    ///
-    /// \brief send a http request with the context used by \a kite
-    ///
-    /// \param endpoint request endpoint
-    /// \param body     body of the request (sent as form url encoded)
-    ///
-    /// \return utils::http::response response received
-    ///
-    utils::http::response sendReq(const utils::http::endpoint& endpoint,
-        const utils::http::Params& body, const utils::FmtArgs& fmtArgs);
-#endif
 };
 
 } // namespace kiteconnect

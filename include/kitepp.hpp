@@ -24,8 +24,8 @@
  */
 
 /**
- * @brief Convenience header for kitepp. This is the ONLY header that should be
- * included.
+ * @brief Convenience header for REST and ticker. REST-only consumers may use
+ * kitepp/rest.hpp, and ticker-only consumers may use kitepp/ticker.hpp.
  *
  * @paragraph ex1 example1
  * @snippet example2.cpp adding kitepp header
@@ -33,10 +33,7 @@
 
 #pragma once
 
-#define CPPHTTPLIB_OPENSSL_SUPPORT
+#include "kitepp/config.hpp"
 
-#include "kitepp/kite.hpp"
-#include "kitepp/kite/kite.hpp"
-#include "kitepp/responses/responses.hpp"
+#include "kitepp/rest.hpp"
 #include "kitepp/ticker.hpp"
-#include "kitepp/userconstants.hpp"

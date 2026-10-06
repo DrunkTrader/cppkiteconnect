@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "../kite.hpp"
+#include "internal.hpp"
 #include "../utils.hpp"
 
 namespace kiteconnect {
@@ -36,7 +37,7 @@ inline std::vector<holding> kite::holdings() {
     return callApi<std::vector<holding>, utils::json::JsonArray, true>(
         "portfolio.holdings", {}, {}, [](utils::json::JsonArray& data) {
             std::vector<holding> Holdings;
-            for (auto& i : data) { Holdings.emplace_back(i.GetObject()); }
+            for (auto& i : data) { Holdings.emplace_back(utils::json::checkedObject(i)); }
             return Holdings;
         });
 };

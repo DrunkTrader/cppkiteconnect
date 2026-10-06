@@ -30,6 +30,7 @@
 #include <gmock/gmock.h>
 
 #include "./kitepp.hpp"
+#include "./test_paths.hpp"
 
 namespace kiteconnect::test {
 
@@ -54,15 +55,16 @@ class mockKite : public kc::kite {
 };
 
 inline string readFile(const string& path) {
-    std::ifstream jsonFile(path);
+    const string resolvedPath = testDataPath(path);
+    std::ifstream jsonFile(resolvedPath);
     if (!jsonFile.good()) {
         string fileName;
         try {
-            size_t lastOfSlash = path.find_last_of('/');
+            size_t lastOfSlash = resolvedPath.find_last_of('/');
             if (lastOfSlash == std::string::npos) {
                 throw std::runtime_error("");
             };
-            fileName = path.substr(lastOfSlash + 1, path.size() - 1);
+            fileName = resolvedPath.substr(lastOfSlash + 1);
         } catch (const std::exception& ex) {
             throw std::runtime_error("invalid test data file path");
         }

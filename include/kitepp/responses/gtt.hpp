@@ -107,8 +107,8 @@ struct modifyGttParams {
     GENERATE_FLUENT_METHOD(modifyGttParams, const std::vector<gttParams>&,
         gttParamsList, GttParamsList);
 
-    int triggerId;
-    double lastPrice;
+    int triggerId = 0;
+    double lastPrice = -1;
     string triggerType;
     string symbol;
     string exchange;
@@ -132,11 +132,7 @@ struct GTT {
         condition = utils::json::get<utils::json::JsonObject, GTTCondition>(
             val, "condition");
 
-        rj::Value ordersBuffer(rj::kArrayType);
-        utils::json::get<utils::json::JsonArray>(val, ordersBuffer, "orders");
-        for (auto& v : ordersBuffer.GetArray()) {
-            orders.emplace_back(v.GetObject());
-        };
+        orders = utils::json::objectArray<order>(val, "orders");
     };
 
     int ID = -1;

@@ -172,11 +172,7 @@ struct basketMargins {
         charges = utils::json::get<utils::json::JsonObject, orderCharges>(
             val, "charges");
 
-        rj::Value ordersVal(rj::kArrayType);
-        utils::json::get<utils::json::JsonArray>(val, ordersVal, "orders");
-        for (auto& i : ordersVal.GetArray()) {
-            orders.emplace_back(i.GetObject());
-        };
+        orders = utils::json::objectArray<orderMargins>(val, "orders");
     };
 
     orderMargins initial;

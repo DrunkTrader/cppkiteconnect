@@ -24,9 +24,9 @@
  */
 
 #pragma once
-#pragma clang diagnostic ignored "-Wundefined-inline"
 
 #include "../kite.hpp"
+#include "internal.hpp"
 #include "../utils.hpp"
 
 namespace kiteconnect {

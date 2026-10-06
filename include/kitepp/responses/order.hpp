@@ -66,7 +66,7 @@ struct placeOrderParams {
     GENERATE_FLUENT_METHOD(placeOrderParams, const string&, validity, Validity);
     GENERATE_FLUENT_METHOD(placeOrderParams, const string&, tag, Tag);
 
-    int quantity;
+    int quantity = 0;
     std::optional<int> disclosedQuantity;
     std::optional<int> validityTtl;
     std::optional<int> icebergLegs;

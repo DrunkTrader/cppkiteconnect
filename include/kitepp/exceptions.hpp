@@ -213,7 +213,7 @@ class libException : public std::exception {
     ///
     /// \return const char* short description
     ///
-    const char* what() { return message.c_str(); };
+    const char* what() const noexcept override { return message.c_str(); };
 
   private:
     string message;
@@ -264,7 +264,7 @@ inline void throwException(
         throw unknownException(code, msg);
     };
 
-    throw libException("unknown exception was thrown by REST API");
+    throw unknownException(code, msg);
 };
 } // namespace internal
 

@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "../kite.hpp"
+#include "internal.hpp"
 #include "../utils.hpp"
 
 namespace kiteconnect {
@@ -52,7 +53,7 @@ inline std::vector<orderMargins> kite::getOrderMargins(
         "margins.orders", { { "", ordersJson.serialize() } }, {},
         [](utils::json::JsonArray& data) {
             std::vector<orderMargins> margins;
-            for (auto& i : data) { margins.emplace_back(i.GetObject()); }
+            for (auto& i : data) { margins.emplace_back(utils::json::checkedObject(i)); }
             return margins;
         });
 };
